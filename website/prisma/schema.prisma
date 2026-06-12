@@ -1,0 +1,110 @@
+// Infinity Sports Park — data model (SQLite for dev; swap datasource to postgresql for prod)
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String?
+  name          String
+  phone         String?
+  role          String    @default("CUSTOMER") // CUSTOMER | STAFF | ADMIN
+  emailVerified DateTime?
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  bookings         Booking[]
+  waiverSignatures WaiverSignature[]
+}
+
+model Resource {
+  id          String  @id @default(cuid())
+  slug        String  @unique
+  name        String
+  sport       String // CRICKET | SOCCER | NETS | TRAINING
+  description String
+  openHour    Int     @default(8) // park-local time (America/Chicago)
+  closeHour   Int     @default(22)
+  baseRate    Int // cents per hour, off-peak
+  peakRate    Int // cents per hour, weekday evenings + weekends
+  active      Boolean @default(true)
+  sortOrder   Int     @default(0)
+
+  bookings Booking[]
+}
+
+// A booking spans one or more contiguous hourly slots on a single resource/date.
+// Maintenance blocks are bookings with status BLOCKED (created by staff), so they
+// occupy slots through the same unique constraint as customer bookings.
+model Booking {
+  id         String   @id @default(cuid())
+  userId     String
+  resourceId String
+  date       String // YYYY-MM-DD, park-local
+  startHour  Int
+  endHour    Int // exclusive
+  status     String   @default("PENDING") // PENDING | CONFIRMED | CANCELLED | BLOCKED
+  totalCents Int      @default(0)
+  paymentRef String?
+  notes      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user     User          @relation(fields: [userId], references: [id])
+  resource Resource      @relation(fields: [resourceId], references: [id])
+  slots    BookingSlot[]
+
+  @@index([userId, date])
+  @@index([resourceId, date])
+}
+
+// One row per occupied hour. The unique constraint is the double-booking guard:
+// two concurrent checkouts for the same slot cannot both insert.
+model BookingSlot {
+  id         String @id @default(cuid())
+  bookingId  String
+  resourceId String
+  slotKey    String // "YYYY-MM-DD:HH" park-local
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@unique([resourceId, slotKey])
+}
+
+model WaiverDocument {
+  id        String   @id @default(cuid())
+  version   Int      @unique
+  title     String
+  body      String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  signatures WaiverSignature[]
+}
+
+// Append-only: signatures are never updated or deleted (legal audit trail).
+model WaiverSignature {
+  id               String   @id @default(cuid())
+  userId           String
+  documentId       String
+  version          Int
+  signedName       String
+  participantName  String // signer, or minor's name for guardian waivers
+  minorDob         String?
+  guardianRelation String?
+  ipAddress        String
+  signedAt         DateTime @default(now())
+
+  user     User           @relation(fields: [userId], references: [id])
+  document WaiverDocument @relation(fields: [documentId], references: [id])
+
+  @@index([userId, version])
+}
