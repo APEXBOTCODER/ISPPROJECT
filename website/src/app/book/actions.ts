@@ -10,6 +10,7 @@ import { parkNow, slotKey } from "@/lib/availability";
 import { processPayment } from "@/lib/payments";
 import { sendEmail } from "@/lib/email";
 import { hasCurrentWaiver } from "@/lib/waiver";
+import { hasVerifiedEmail } from "@/lib/verification";
 
 const bookingSchema = z.object({
   resourceId: z.string().min(1),
@@ -44,6 +45,11 @@ export async function createBooking(formData: FormData) {
   }
   const input = parsed.data;
   const sortedHours = [...input.hours].sort((a, b) => a - b);
+
+  // Verified email is required before booking (account-security gate)
+  if (!(await hasVerifiedEmail(userId))) {
+    redirect(`/verify?next=${encodeURIComponent("/book")}`);
+  }
 
   // Waiver gate: a current signed waiver is required before payment (spec §7)
   if (!(await hasCurrentWaiver(userId))) {

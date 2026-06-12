@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { auth, signIn } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { issueVerificationCode } from "@/lib/verification";
 
 export const metadata = { title: "Create account" };
 
@@ -37,7 +38,7 @@ async function signupAction(formData: FormData) {
     redirect(`/signup?error=${encodeURIComponent("An account with this email already exists")}`);
   }
 
-  await prisma.user.create({
+  const user = await prisma.user.create({
     data: {
       name: parsed.data.name,
       email: parsed.data.email,
@@ -46,10 +47,13 @@ async function signupAction(formData: FormData) {
     },
   });
 
+  // Send the email verification code, then drop the user on /verify
+  await issueVerificationCode(user.id, "EMAIL");
+
   await signIn("credentials", {
     email: parsed.data.email,
     password: parsed.data.password,
-    redirectTo: "/dashboard",
+    redirectTo: "/verify?next=/dashboard",
   });
 }
 

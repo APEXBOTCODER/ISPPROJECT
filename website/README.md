@@ -38,6 +38,10 @@ integrity check — must always report exactly 1 winner).
 - **Auth** — email+password (bcrypt, 10-char minimum), JWT sessions, roles
   (CUSTOMER / STAFF / ADMIN) enforced server-side on every protected page and
   action. Google sign-in activates automatically when keys are present (below).
+- **Account verification** — 6-digit email code issued at signup (required
+  before booking) and optional SMS phone verification at `/verify`. Codes are
+  SHA-256 hashed, expire in 10 minutes, max 5 attempts, 60s resend cooldown.
+  Delivery follows the email/SMS provider toggles (console in dev).
 - **Reservation engine** — sport → facility → date → hourly slot grid with
   live availability, peak/off-peak pricing (weekday 5pm+ & weekends), up to 6
   consecutive hours, 60-day advance window. **Double-booking is impossible**:
@@ -85,6 +89,16 @@ everything "Test mode — no card charged".
 2. Verify the domain in Resend (SPF/DKIM/DMARC DNS records).
 3. `.env`: `EMAIL_PROVIDER="resend"`, `RESEND_API_KEY`, `EMAIL_FROM`.
 4. Replace the `TODO(resend)` block in `src/lib/email.ts` (3 lines).
+
+### 2b. SMS via Twilio (verification codes + reminders)
+
+1. `npm install twilio`; complete **A2P 10DLC registration** (takes 1–2 weeks
+   for US numbers — start early).
+2. `.env`: `SMS_PROVIDER="twilio"`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`,
+   `TWILIO_FROM_NUMBER`.
+3. Replace the `TODO(twilio)` block in `src/lib/sms.ts` (3 lines).
+
+Until then, SMS verification codes print to the server console.
 
 ### 3. Google sign-in
 

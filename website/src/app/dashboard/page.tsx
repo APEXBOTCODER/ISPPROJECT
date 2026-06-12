@@ -80,6 +80,37 @@ export default async function DashboardPage({
         </p>
       )}
 
+      {/* Verification status */}
+      <section className="mt-8 rounded-2xl border border-navy/10 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="display text-xl text-navy">Account verification</h2>
+            <p className="mt-1 text-sm text-navy/60">
+              Email:{" "}
+              {dbUser?.emailVerified ? (
+                <span className="font-semibold text-green-700">✓ verified</span>
+              ) : (
+                <span className="font-semibold text-amber-700">not verified — required for booking</span>
+              )}
+              {" · "}Phone:{" "}
+              {dbUser?.phoneVerified ? (
+                <span className="font-semibold text-green-700">✓ verified</span>
+              ) : (
+                <span className="text-navy/60">not verified (optional)</span>
+              )}
+            </p>
+          </div>
+          {(!dbUser?.emailVerified || !dbUser?.phoneVerified) && (
+            <Link
+              href="/verify?next=/dashboard"
+              className="rounded-md border border-navy/20 px-4 py-2 text-sm font-semibold text-navy hover:bg-navy/5"
+            >
+              Verify now
+            </Link>
+          )}
+        </div>
+      </section>
+
       {/* Waiver status */}
       <section className="mt-8 rounded-2xl border border-navy/10 p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">

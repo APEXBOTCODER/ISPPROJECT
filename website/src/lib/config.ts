@@ -17,6 +17,9 @@ export const config = {
   /** "console" logs outbound email to the server console; "resend" sends real email. */
   emailProvider: (process.env.EMAIL_PROVIDER ?? "console") as "console" | "resend",
 
+  /** "console" logs SMS to the server console; "twilio" sends real texts. */
+  smsProvider: (process.env.SMS_PROVIDER ?? "console") as "console" | "twilio",
+
   /** Google sign-in button renders only when OAuth credentials exist. */
   googleAuthEnabled: Boolean(
     process.env.AUTH_GOOGLE_ID && process.env.AUTH_GOOGLE_SECRET

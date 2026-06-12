@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { config } from "@/lib/config";
 import { hasCurrentWaiver } from "@/lib/waiver";
+import { hasVerifiedEmail } from "@/lib/verification";
 import BookingWizard from "@/components/BookingWizard";
 import { createBooking } from "./actions";
 import Link from "next/link";
@@ -18,12 +19,13 @@ export default async function BookPage({
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
 
-  const [resources, waiverSigned] = await Promise.all([
+  const [resources, waiverSigned, emailVerified] = await Promise.all([
     prisma.resource.findMany({
       where: { active: true },
       orderBy: { sortOrder: "asc" },
     }),
     hasCurrentWaiver(session.user.id),
+    hasVerifiedEmail(session.user.id),
   ]);
   const { error } = await searchParams;
 
@@ -35,6 +37,16 @@ export default async function BookPage({
       <p className="mt-2 text-navy/70">
         Real-time availability · hourly slots · instant confirmation.
       </p>
+
+      {!emailVerified && (
+        <p className="mt-4 rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800 ring-1 ring-amber-200">
+          Please verify your email before booking.{" "}
+          <Link href="/verify?next=/book" className="font-semibold underline">
+            Enter your verification code
+          </Link>{" "}
+          — it was sent when you signed up.
+        </p>
+      )}
 
       {!waiverSigned && (
         <p className="mt-4 rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800 ring-1 ring-amber-200">

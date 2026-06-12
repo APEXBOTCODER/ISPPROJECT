@@ -17,12 +17,31 @@ model User {
   phone         String?
   role          String    @default("CUSTOMER") // CUSTOMER | STAFF | ADMIN
   emailVerified DateTime?
+  phoneVerified DateTime?
   image         String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  bookings         Booking[]
-  waiverSignatures WaiverSignature[]
+  bookings          Booking[]
+  waiverSignatures  WaiverSignature[]
+  verificationCodes VerificationCode[]
+}
+
+// Short-lived 6-digit codes for email/phone ownership verification.
+// Codes are stored hashed; max 5 attempts; one active code per channel.
+model VerificationCode {
+  id         String    @id @default(cuid())
+  userId     String
+  channel    String // EMAIL | PHONE
+  codeHash   String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  attempts   Int       @default(0)
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, channel])
 }
 
 model Resource {
