@@ -25,6 +25,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           where: { email: parsed.data.email.toLowerCase() },
         });
         if (!user?.passwordHash) return null;
+        if (!user.active) return null; // deactivated accounts can't sign in
 
         const valid = await bcrypt.compare(parsed.data.password, user.passwordHash);
         if (!valid) return null;
@@ -57,9 +58,20 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       return token;
     },
     async session({ session, token }) {
-      if (session.user) {
+      if (session.user && token.uid) {
+        // Re-check the account each request so a deactivation (or role change)
+        // takes effect immediately, even for already-issued JWTs.
+        const dbUser = await prisma.user.findUnique({
+          where: { id: token.uid as string },
+          select: { active: true, role: true },
+        });
+        if (!dbUser || !dbUser.active) {
+          // Deactivated/removed → present no authenticated user (locks them out).
+          delete (session as { user?: unknown }).user;
+          return session;
+        }
         session.user.id = token.uid as string;
-        session.user.role = (token.role as string) ?? "CUSTOMER";
+        session.user.role = dbUser.role ?? "CUSTOMER";
       }
       return session;
     },

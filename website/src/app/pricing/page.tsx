@@ -1,14 +1,18 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { formatCents } from "@/lib/pricing";
+import { getSettings } from "@/lib/settings";
 
 export const metadata = { title: "Membership & Pricing" };
 
 export default async function PricingPage() {
-  const resources = await prisma.resource.findMany({
-    where: { active: true },
-    orderBy: { sortOrder: "asc" },
-  });
+  const [resources, settings] = await Promise.all([
+    prisma.resource.findMany({
+      where: { active: true },
+      orderBy: { sortOrder: "asc" },
+    }),
+    getSettings(),
+  ]);
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-12">
@@ -48,9 +52,7 @@ export default async function PricingPage() {
         <div className="rounded-2xl border border-navy/10 p-6">
           <h2 className="display text-2xl text-navy">Member tiers</h2>
           <p className="mt-2 text-sm leading-6 text-navy/70">
-            Member discounts, hour packages (buy 10, save 15%), and team season
-            passes launch with the park in Summer 2026. Founding-member pricing
-            will be announced first to the mailing list.
+            {settings["membership.tiersText"]}
           </p>
         </div>
         <div className="rounded-2xl border border-navy/10 p-6">

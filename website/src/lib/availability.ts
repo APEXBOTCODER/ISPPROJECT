@@ -35,7 +35,9 @@ export function parkNow(): { date: string; hour: number } {
 
 /** Release expired unpaid holds so their slots return to the pool. */
 export async function releaseExpiredHolds(): Promise<void> {
-  const cutoff = new Date(Date.now() - config.holdMinutes * 60_000);
+  const { getBookingPolicy } = await import("@/lib/policy");
+  const { holdMinutes } = await getBookingPolicy();
+  const cutoff = new Date(Date.now() - holdMinutes * 60_000);
   await prisma.booking.updateMany({
     where: { status: "PENDING", createdAt: { lt: cutoff } },
     data: { status: "CANCELLED", notes: "Hold expired before payment" },
@@ -43,6 +45,37 @@ export async function releaseExpiredHolds(): Promise<void> {
   await prisma.bookingSlot.deleteMany({
     where: { booking: { status: "CANCELLED" } },
   });
+}
+
+/**
+ * After a booking transaction fails on the unique-slot constraint, figure out
+ * which of the requested segments are now occupied (by someone else) and return
+ * them as friendly "Facility · date" labels for the error message.
+ */
+export async function findSlotConflicts(
+  segments: { resourceId: string; resourceName: string; date: string; hours: number[] }[]
+): Promise<string[]> {
+  const wanted = segments.flatMap((s) =>
+    s.hours.map((h) => ({ resourceId: s.resourceId, slotKey: slotKey(s.date, h) }))
+  );
+  if (wanted.length === 0) return [];
+
+  const taken = await prisma.bookingSlot.findMany({
+    where: {
+      OR: wanted.map((w) => ({ resourceId: w.resourceId, slotKey: w.slotKey })),
+      booking: { status: { in: ["PENDING", "CONFIRMED", "BLOCKED"] } },
+    },
+    select: { resourceId: true, slotKey: true },
+  });
+
+  const nameByKey = new Map(segments.map((s) => [`${s.resourceId}:${s.date}`, s.resourceName]));
+  const conflicts = new Set<string>();
+  for (const t of taken) {
+    const date = t.slotKey.split(":")[0];
+    const name = nameByKey.get(`${t.resourceId}:${date}`) ?? "A facility";
+    conflicts.add(`${name} · ${date}`);
+  }
+  return [...conflicts].sort();
 }
 
 /** Hour-by-hour availability for one resource on one park-local date. */

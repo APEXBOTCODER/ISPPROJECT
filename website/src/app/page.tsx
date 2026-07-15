@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { config } from "@/lib/config";
 import InfinityMark from "@/components/InfinityMark";
-import PhotoPlaceholder from "@/components/PhotoPlaceholder";
+import SiteImage from "@/components/SiteImage";
 
 const features = [
   { icon: "🏏", title: "Cricket Grounds", text: "Two full-size grounds with turf and artificial pitches for T20, T10, and tape-ball." },
@@ -37,11 +37,6 @@ export default function HomePage() {
             ))}
           </p>
 
-          <div className="mt-8 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/5 px-5 py-2 text-sm font-bold uppercase tracking-wide">
-            <span className="h-2 w-2 animate-pulse rounded-full bg-pitch" aria-hidden="true" />
-            {config.launchLabel}
-          </div>
-
           <div className="mt-8 flex flex-wrap justify-center gap-4">
             <Link href="/book" className="btn-brand rounded-full px-8 py-3.5 text-base uppercase tracking-wide">
               Book a Field
@@ -53,10 +48,6 @@ export default function HomePage() {
               Explore Facilities
             </Link>
           </div>
-
-          <p className="mt-10 text-sm text-white/60">
-            📍 {config.location}
-          </p>
         </div>
         <div className="h-1.5 gradient-brand" />
       </section>
@@ -83,7 +74,7 @@ export default function HomePage() {
       <section className="bg-navy/[0.03] py-16">
         <div className="mx-auto grid max-w-7xl gap-8 px-4 md:grid-cols-2">
           <div className="card-lift overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-navy/10">
-            <PhotoPlaceholder label="Cricket ground aerial" className="h-56" variant="field" />
+            <SiteImage slot="home-cricket" label="Cricket ground aerial" className="h-56 w-full" variant="field" />
             <div className="p-6">
               <h3 className="display text-3xl text-navy">Cricket</h3>
               <p className="mt-2 text-sm leading-6 text-navy/70">
@@ -96,11 +87,11 @@ export default function HomePage() {
             </div>
           </div>
           <div className="card-lift overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-navy/10">
-            <PhotoPlaceholder label="Soccer field at golden hour" className="h-56" variant="sky" />
+            <SiteImage slot="home-soccer" label="Soccer field at golden hour" className="h-56 w-full" variant="sky" />
             <div className="p-6">
               <h3 className="display text-3xl text-navy">Soccer</h3>
               <p className="mt-2 text-sm leading-6 text-navy/70">
-                11v11 and 7v7 fields with pro-grade turf for matches, pickup games,
+                11v11 and 7v7 fields for matches, pickup games,
                 youth leagues, and team training blocks.
               </p>
               <Link href="/soccer" className="mt-4 inline-block font-semibold text-sky hover:underline">

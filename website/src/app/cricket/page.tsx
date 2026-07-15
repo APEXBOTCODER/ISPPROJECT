@@ -1,9 +1,17 @@
 import Link from "next/link";
-import PhotoPlaceholder from "@/components/PhotoPlaceholder";
+import SiteImage from "@/components/SiteImage";
+import { minRateBySport } from "@/lib/rates";
+import { formatCents } from "@/lib/pricing";
 
 export const metadata = { title: "Cricket" };
 
-export default function CricketPage() {
+export default async function CricketPage() {
+  const min = await minRateBySport();
+  const priceParts: string[] = [];
+  if (min.CRICKET !== undefined) priceParts.push(`Grounds from ${formatCents(min.CRICKET)}/hr`);
+  if (min.NETS !== undefined) priceParts.push(`nets from ${formatCents(min.NETS)}/hr`);
+  const priceLine = priceParts.join(" · ");
+
   return (
     <div className="mx-auto max-w-5xl px-4 py-12">
       <h1 className="display text-5xl text-navy">
@@ -14,7 +22,7 @@ export default function CricketPage() {
         are designed for serious league play and weekend tape-ball alike.
       </p>
 
-      <PhotoPlaceholder label="Cricket ground panorama" className="mt-8 h-72 w-full" variant="field" />
+      <SiteImage slot="cricket-hero" label="Cricket ground panorama" className="mt-8 h-72 w-full" variant="field" />
 
       <div className="mt-10 grid gap-8 md:grid-cols-2">
         <section>
@@ -40,7 +48,7 @@ export default function CricketPage() {
       <div className="mt-10 rounded-2xl bg-navy p-6 text-white sm:flex sm:items-center sm:justify-between">
         <div>
           <h2 className="display text-2xl">Ready to take the pitch?</h2>
-          <p className="mt-1 text-sm text-white/70">Grounds from $50/hr · nets from $25/hr.</p>
+          {priceLine && <p className="mt-1 text-sm text-white/70">{priceLine}.</p>}
         </div>
         <Link href="/book" className="btn-brand mt-4 inline-block rounded-full px-6 py-3 text-sm uppercase sm:mt-0">
           Book cricket

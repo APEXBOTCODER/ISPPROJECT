@@ -5,6 +5,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { config } from "@/lib/config";
 import { getCurrentWaiver, hasCurrentWaiver } from "@/lib/waiver";
+import { buildSignedWaiverPdf, sha256Hex } from "@/lib/waiverPdf";
 
 export const metadata = { title: "Liability Waiver" };
 export const dynamic = "force-dynamic";
@@ -15,6 +16,7 @@ const signSchema = z.object({
   minorDob: z.string().max(10).optional(),
   guardianRelation: z.string().max(50).optional(),
   agree: z.literal("on"),
+  consent: z.literal("on"),
 });
 
 async function signWaiverAction(formData: FormData) {
@@ -29,6 +31,7 @@ async function signWaiverAction(formData: FormData) {
     minorDob: formData.get("minorDob") || undefined,
     guardianRelation: formData.get("guardianRelation") || undefined,
     agree: formData.get("agree"),
+    consent: formData.get("consent"),
   });
   if (!parsed.success) {
     redirect(`/waiver?next=${encodeURIComponent(next)}&error=1`);
@@ -42,9 +45,10 @@ async function signWaiverAction(formData: FormData) {
     headerList.get("x-forwarded-for")?.split(",")[0]?.trim() ??
     headerList.get("x-real-ip") ??
     "unknown";
+  const userAgent = headerList.get("user-agent") ?? null;
 
   // Append-only legal record: signer + optional minor, IP, doc version, timestamp
-  await prisma.waiverSignature.create({
+  const signature = await prisma.waiverSignature.create({
     data: {
       userId: session.user.id,
       documentId: document.id,
@@ -56,8 +60,24 @@ async function signWaiverAction(formData: FormData) {
         ? parsed.data.guardianRelation || "Parent/Guardian"
         : undefined,
       ipAddress,
+      userAgent,
+      consentEsign: true,
     },
   });
+
+  // Seal the exact signed document as a PDF + tamper-evidence hash (industry standard).
+  const bytes = await buildSignedWaiverPdf({
+    document,
+    signature,
+    userEmail: session.user.email ?? "",
+  });
+  await prisma.$transaction([
+    prisma.waiverPdf.create({ data: { signatureId: signature.id, data: Buffer.from(bytes) } }),
+    prisma.waiverSignature.update({
+      where: { id: signature.id },
+      data: { pdfSha256: sha256Hex(bytes) },
+    }),
+  ]);
 
   redirect(next);
 }
@@ -153,6 +173,14 @@ export default async function WaiverPage({
           <span>
             I have read and agree to the Waiver &amp; Release above (v{document.version}).
             My typed name constitutes my electronic signature.
+          </span>
+        </label>
+
+        <label className="flex items-start gap-2 text-sm">
+          <input type="checkbox" name="consent" required className="mt-0.5" />
+          <span>
+            I consent to sign this waiver electronically and to receive a copy in
+            electronic form (ESIGN/UETA).
           </span>
         </label>
 

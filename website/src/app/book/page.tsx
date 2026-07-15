@@ -4,8 +4,9 @@ import { prisma } from "@/lib/prisma";
 import { config } from "@/lib/config";
 import { hasCurrentWaiver } from "@/lib/waiver";
 import { hasVerifiedEmail } from "@/lib/verification";
+import { getBookingPolicy } from "@/lib/policy";
 import BookingWizard from "@/components/BookingWizard";
-import { createBooking } from "./actions";
+import { createReservation } from "./actions";
 import Link from "next/link";
 
 export const metadata = { title: "Book a Field" };
@@ -19,13 +20,14 @@ export default async function BookPage({
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
 
-  const [resources, waiverSigned, emailVerified] = await Promise.all([
+  const [resources, waiverSigned, emailVerified, policy] = await Promise.all([
     prisma.resource.findMany({
       where: { active: true },
       orderBy: { sortOrder: "asc" },
     }),
     hasCurrentWaiver(session.user.id),
     hasVerifiedEmail(session.user.id),
+    getBookingPolicy(),
   ]);
   const { error } = await searchParams;
 
@@ -67,8 +69,10 @@ export default async function BookPage({
       <div className="mt-8">
         <BookingWizard
           resources={resources}
-          createBooking={createBooking}
-          maxAdvanceDays={config.advanceBookingDays}
+          createReservation={createReservation}
+          maxAdvanceDays={policy.advanceBookingDays}
+          maxHoursPerSegment={policy.maxHoursPerSegment}
+          maxSegmentsPerReservation={policy.maxSegmentsPerReservation}
           isMockPayments={config.paymentsProvider === "mock"}
         />
       </div>

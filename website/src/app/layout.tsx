@@ -24,7 +24,7 @@ export const metadata: Metadata = {
     template: `%s | ${config.siteName}`,
   },
   description:
-    "Premium multi-sport facility near Argyle, Texas. Cricket grounds, soccer fields, practice nets and training facility. Book by the hour. Launching Summer 2026.",
+    "Premium multi-sport facility near Argyle, Texas. Cricket grounds, soccer fields, practice nets and training facility. Book by the hour.",
   openGraph: {
     title: `${config.siteName} — ${config.tagline}`,
     description:

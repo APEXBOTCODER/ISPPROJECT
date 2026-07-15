@@ -13,7 +13,6 @@ export default function Footer() {
             <span className="display text-lg">Infinity Sports Park</span>
           </div>
           <p className="mt-3 text-sm text-white/70">{config.tagline}.</p>
-          <p className="mt-2 text-sm text-white/70">{config.location}</p>
           <p className="mt-2 text-xs text-white/50">
             Affiliated with Argyle Cricket Club — &ldquo;Cricket is our first love.&rdquo;
           </p>
@@ -53,7 +52,7 @@ export default function Footer() {
         </div>
       </div>
       <div className="border-t border-white/10 py-4 text-center text-xs text-white/50">
-        © {new Date().getFullYear()} Infinity Sports Park · {config.launchLabel} · Play • Train • Compete • Inspire
+        © {new Date().getFullYear()} Infinity Sports Park · Play • Train • Compete • Inspire
       </div>
     </footer>
   );

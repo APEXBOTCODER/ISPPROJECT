@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import MultiDayCalendar from "@/components/MultiDayCalendar";
+import { fetchDayAvailability, hourBounds } from "@/lib/dayAvailability";
 
 interface ResourceOption {
   id: string;
@@ -14,11 +16,12 @@ interface ResourceOption {
   peakRate: number;
 }
 
-interface Slot {
-  hour: number;
-  status: "free" | "taken" | "blocked" | "past";
-  peak: boolean;
-  priceCents: number;
+interface Segment {
+  resourceId: string;
+  resourceName: string;
+  date: string;
+  hours: number[];
+  subtotal: number;
 }
 
 const sportLabels: Record<string, string> = {
@@ -31,270 +34,249 @@ const sportLabels: Record<string, string> = {
 function money(cents: number) {
   return `$${(cents / 100).toFixed(cents % 100 === 0 ? 0 : 2)}`;
 }
-
-function formatHour(hour: number) {
-  const h12 = hour % 12 === 0 ? 12 : hour % 12;
-  return `${h12}${hour < 12 ? "am" : "pm"}`;
+function fmtHour(h: number) {
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}${h < 12 ? "am" : "pm"}`;
 }
 
 export default function BookingWizard({
   resources,
-  createBooking,
+  createReservation,
   maxAdvanceDays,
+  maxHoursPerSegment,
+  maxSegmentsPerReservation,
   isMockPayments,
 }: {
   resources: ResourceOption[];
-  createBooking: (formData: FormData) => Promise<void>;
+  createReservation: (formData: FormData) => Promise<void>;
   maxAdvanceDays: number;
+  maxHoursPerSegment: number;
+  maxSegmentsPerReservation: number;
   isMockPayments: boolean;
 }) {
-  const sports = useMemo(
-    () => Array.from(new Set(resources.map((r) => r.sport))),
-    [resources]
-  );
+  const sports = useMemo(() => Array.from(new Set(resources.map((r) => r.sport))), [resources]);
   const [sport, setSport] = useState(sports[0] ?? "CRICKET");
-  const sportResources = useMemo(
-    () => resources.filter((r) => r.sport === sport),
-    [resources, sport]
+  const sportResources = useMemo(() => resources.filter((r) => r.sport === sport), [resources, sport]);
+
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const selectedResources = useMemo(
+    () => resources.filter((r) => selectedIds.has(r.id)),
+    [resources, selectedIds]
   );
-  const [resourceId, setResourceId] = useState(sportResources[0]?.id ?? "");
-  const resource = resources.find((r) => r.id === resourceId);
 
-  const today = new Date();
-  const minDate = today.toISOString().slice(0, 10);
-  const max = new Date(today);
-  max.setDate(max.getDate() + maxAdvanceDays);
-  const maxDate = max.toISOString().slice(0, 10);
+  const today = new Date().toISOString().slice(0, 10);
+  const maxD = new Date();
+  maxD.setDate(maxD.getDate() + maxAdvanceDays);
+  const maxDate = maxD.toISOString().slice(0, 10);
 
-  const [date, setDate] = useState(minDate);
-  const [slots, setSlots] = useState<Slot[] | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [selected, setSelected] = useState<number[]>([]);
+  const [days, setDays] = useState<string[]>([]);
+  const [fromHour, setFromHour] = useState(8);
+  const [toHour, setToHour] = useState(9);
+  const [segments, setSegments] = useState<Segment[]>([]);
+  const [label, setLabel] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  // Keep resource selection valid when switching sports
+  const bounds = useMemo(() => hourBounds(selectedResources), [selectedResources]);
+
+  // Clamp the hour range into the selected facilities' overlapping window.
   useEffect(() => {
-    if (!sportResources.some((r) => r.id === resourceId)) {
-      setResourceId(sportResources[0]?.id ?? "");
-    }
-  }, [sport, sportResources, resourceId]);
+    if (!bounds) return;
+    setFromHour((f) => Math.min(Math.max(f, bounds.open), bounds.close - 1));
+    setToHour((t) => Math.min(Math.max(t, bounds.open + 1), bounds.close));
+  }, [bounds]);
 
-  const loadSlots = useCallback(async () => {
-    if (!resourceId || !date) return;
-    setLoading(true);
-    setSelected([]);
-    try {
-      const res = await fetch(
-        `/api/availability?resourceId=${encodeURIComponent(resourceId)}&date=${date}`,
-        { cache: "no-store" }
-      );
-      const data = await res.json();
-      setSlots(data.slots ?? []);
-    } catch {
-      setSlots([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [resourceId, date]);
-
-  useEffect(() => {
-    loadSlots();
-  }, [loadSlots]);
-
-  function toggleHour(hour: number) {
-    setSelected((prev) => {
-      if (prev.includes(hour)) {
-        // Allow deselect only from the ends so the block stays contiguous
-        const sorted = [...prev].sort((a, b) => a - b);
-        if (hour === sorted[0] || hour === sorted[sorted.length - 1]) {
-          return prev.filter((h) => h !== hour);
-        }
-        return prev;
-      }
-      if (prev.length === 0) return [hour];
-      const sorted = [...prev].sort((a, b) => a - b);
-      // Only allow extending the contiguous block, up to 6 hours
-      if (
-        prev.length < 6 &&
-        (hour === sorted[0] - 1 || hour === sorted[sorted.length - 1] + 1)
-      ) {
-        return [...prev, hour];
-      }
-      return [hour];
+  function toggleFacility(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
     });
   }
 
-  const total = useMemo(() => {
-    if (!slots) return 0;
-    return selected.reduce((sum, hour) => {
-      const slot = slots.find((s) => s.hour === hour);
-      return sum + (slot?.priceCents ?? 0);
-    }, 0);
-  }, [selected, slots]);
+  const cartKeys = useMemo(() => new Set(segments.map((s) => `${s.resourceId}:${s.date}`)), [segments]);
 
-  const sortedSelection = [...selected].sort((a, b) => a - b);
+  async function addDays() {
+    if (selectedResources.length === 0 || days.length === 0) return;
+    if (!bounds) { setNotice("The selected grounds have no common open hours."); return; }
+    if (toHour <= fromHour) { setNotice("Choose a valid hour range."); return; }
+    if (toHour - fromHour > maxHoursPerSegment) { setNotice(`Max ${maxHoursPerSegment} hours per day.`); return; }
+
+    const hours = Array.from({ length: toHour - fromHour }, (_, i) => fromHour + i);
+    const combos = selectedResources.flatMap((r) => days.map((date) => ({ r, date })));
+    if (segments.length + combos.length > maxSegmentsPerReservation) {
+      setNotice(`That would exceed ${maxSegmentsPerReservation} sessions per reservation. Reduce grounds or days.`);
+      return;
+    }
+
+    setAdding(true);
+    try {
+      const results = await Promise.all(
+        combos.map(async ({ r, date }) => {
+          if (cartKeys.has(`${r.id}:${date}`)) return { r, date, ok: false, dup: true, subtotal: 0 };
+          const slots = await fetchDayAvailability(r.id, date);
+          const byHour = new Map(slots.map((s) => [s.hour, s]));
+          const ok = hours.every((h) => byHour.get(h)?.status === "free");
+          const subtotal = ok ? hours.reduce((sum, h) => sum + (byHour.get(h)?.priceCents ?? 0), 0) : 0;
+          return { r, date, ok, dup: false, subtotal };
+        })
+      );
+      const toAdd = results.filter((x) => x.ok);
+      const skipped = results.filter((x) => !x.ok && !x.dup).map((x) => `${x.r.name} · ${x.date}`);
+      if (toAdd.length > 0) {
+        setSegments((prev) => [
+          ...prev,
+          ...toAdd.map((x) => ({ resourceId: x.r.id, resourceName: x.r.name, date: x.date, hours, subtotal: x.subtotal })),
+        ]);
+      }
+      setDays([]);
+      setNotice(
+        skipped.length
+          ? `Added ${toAdd.length}. Unavailable for ${fmtHour(fromHour)}–${fmtHour(toHour)}: ${skipped.join("; ")}.`
+          : toAdd.length ? `Added ${toAdd.length} session(s).` : "Those grounds/days aren't available for that time."
+      );
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  const submitSegments = useMemo(
+    () => segments.map((s) => ({ resourceId: s.resourceId, date: s.date, hours: s.hours })),
+    [segments]
+  );
+  const grandTotal = segments.reduce((sum, s) => sum + s.subtotal, 0);
+  const hourOptions = (lo: number, hi: number) => Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
 
   return (
-    <div className="grid gap-8 lg:grid-cols-[1fr_320px]">
+    <div className="grid gap-8 lg:grid-cols-[1fr_340px]">
       <div className="space-y-6">
         {/* Step 1: sport */}
         <section>
           <h2 className="display text-xl text-navy">1 · Choose your sport</h2>
           <div className="mt-3 flex flex-wrap gap-2">
             {sports.map((s) => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => setSport(s)}
-                className={`rounded-full px-4 py-2 text-sm font-semibold transition-colors ${
-                  sport === s
-                    ? "gradient-brand text-white"
-                    : "bg-navy/5 text-navy hover:bg-navy/10"
-                }`}
-              >
+              <button key={s} type="button" onClick={() => setSport(s)}
+                className={`rounded-full px-4 py-2 text-sm font-semibold transition-colors ${sport === s ? "gradient-brand text-white" : "bg-navy/5 text-navy hover:bg-navy/10"}`}>
                 {sportLabels[s] ?? s}
               </button>
             ))}
           </div>
         </section>
 
-        {/* Step 2: facility */}
+        {/* Step 2: facilities (multi-select) */}
         <section>
-          <h2 className="display text-xl text-navy">2 · Pick a facility</h2>
+          <h2 className="display text-xl text-navy">2 · Pick grounds <span className="text-sm font-normal text-navy/50">(select one or more)</span></h2>
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            {sportResources.map((r) => (
-              <button
-                key={r.id}
-                type="button"
-                onClick={() => setResourceId(r.id)}
-                className={`card-lift rounded-xl border p-4 text-left ${
-                  resourceId === r.id
-                    ? "border-pitch ring-2 ring-pitch/40"
-                    : "border-navy/15"
-                }`}
-              >
-                <div className="font-bold text-navy">{r.name}</div>
-                <p className="mt-1 text-xs text-navy/60 line-clamp-2">{r.description}</p>
-                <p className="mt-2 text-sm font-semibold text-pitch-deep">
-                  From {money(r.baseRate)}/hr
-                </p>
-              </button>
-            ))}
+            {sportResources.map((r) => {
+              const on = selectedIds.has(r.id);
+              return (
+                <button key={r.id} type="button" onClick={() => toggleFacility(r.id)}
+                  className={`card-lift relative rounded-xl border p-4 text-left ${on ? "border-pitch ring-2 ring-pitch/40" : "border-navy/15"}`}>
+                  <span className={`absolute right-3 top-3 flex h-5 w-5 items-center justify-center rounded-full text-xs ${on ? "gradient-brand text-white" : "border border-navy/20 text-transparent"}`}>✓</span>
+                  <div className="pr-6 font-bold text-navy">{r.name}</div>
+                  <p className="mt-1 text-xs text-navy/60 line-clamp-2">{r.description}</p>
+                  <p className="mt-2 text-sm font-semibold text-pitch-deep">From {money(r.baseRate)}/hr</p>
+                </button>
+              );
+            })}
           </div>
         </section>
 
-        {/* Step 3: date */}
+        {/* Step 3: days + hours */}
         <section>
-          <h2 className="display text-xl text-navy">3 · Pick a date</h2>
-          <input
-            type="date"
-            value={date}
-            min={minDate}
-            max={maxDate}
-            onChange={(e) => setDate(e.target.value)}
-            className="mt-3 rounded-md border border-navy/20 px-3 py-2 focus:border-sky focus:outline-none focus:ring-2 focus:ring-sky/30"
-            aria-label="Booking date"
-          />
-        </section>
-
-        {/* Step 4: slots */}
-        <section>
-          <h2 className="display text-xl text-navy">4 · Choose your hours</h2>
-          <p className="mt-1 text-xs text-navy/60">
-            All times US Central. Select up to 6 consecutive hours. Peak = weekday evenings &amp; weekends.
-          </p>
-          {loading ? (
-            <p className="mt-4 text-sm text-navy/60">Loading availability…</p>
-          ) : slots && slots.length > 0 ? (
-            <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-5">
-              {slots.map((slot) => {
-                const isSelected = selected.includes(slot.hour);
-                const disabled = slot.status !== "free";
-                return (
-                  <button
-                    key={slot.hour}
-                    type="button"
-                    disabled={disabled}
-                    onClick={() => toggleHour(slot.hour)}
-                    aria-pressed={isSelected}
-                    className={`rounded-lg border px-2 py-2.5 text-center text-sm transition-colors ${
-                      isSelected
-                        ? "gradient-brand border-transparent font-bold text-white"
-                        : disabled
-                          ? "cursor-not-allowed border-navy/10 bg-navy/5 text-navy/30 line-through"
-                          : "border-navy/15 hover:border-pitch hover:bg-pitch/5"
-                    }`}
-                  >
-                    <div>{formatHour(slot.hour)}</div>
-                    <div className={`text-xs ${isSelected ? "text-white/90" : "text-navy/50"}`}>
-                      {disabled
-                        ? slot.status === "past"
-                          ? "—"
-                          : "Booked"
-                        : `${money(slot.priceCents)}${slot.peak ? " ⚡" : ""}`}
-                    </div>
-                  </button>
-                );
-              })}
+          <h2 className="display text-xl text-navy">3 · Pick days &amp; hours</h2>
+          {selectedResources.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {selectedResources.map((r) => (
+                <span key={r.id} className="inline-flex items-center gap-1 rounded-full bg-navy/5 px-3 py-1 text-xs font-semibold text-navy">
+                  {r.name}
+                  <button type="button" onClick={() => toggleFacility(r.id)} className="text-navy/40 hover:text-navy" aria-label={`Remove ${r.name}`}>✕</button>
+                </span>
+              ))}
             </div>
-          ) : (
-            <p className="mt-4 text-sm text-navy/60">No slots for this date.</p>
           )}
+          <p className="mt-2 text-xs text-navy/60">
+            Click days (or drag a range); pick one time (up to {maxHoursPerSegment} hrs) applied to
+            every selected ground &amp; day — availability is checked per ground/day.
+          </p>
+          <div className="mt-3 flex flex-col gap-4 sm:flex-row sm:items-start">
+            <MultiDayCalendar value={days} onChange={setDays} minDate={today} maxDate={maxDate} />
+            <div className="space-y-3">
+              {selectedResources.length === 0 ? (
+                <p className="max-w-xs text-sm text-navy/50">Select one or more grounds above.</p>
+              ) : !bounds ? (
+                <p className="max-w-xs rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900 ring-1 ring-amber-200">
+                  The selected grounds have no common open hours — pick grounds with overlapping hours.
+                </p>
+              ) : (
+                <div className="flex items-end gap-2">
+                  <label className="text-xs font-semibold text-navy/60">From
+                    <select value={fromHour} onChange={(e) => setFromHour(Number(e.target.value))} className="mt-1 block rounded-md border border-navy/20 px-2 py-1.5 text-sm">
+                      {hourOptions(bounds.open, bounds.close - 1).map((h) => <option key={h} value={h}>{h}:00</option>)}
+                    </select>
+                  </label>
+                  <label className="text-xs font-semibold text-navy/60">To
+                    <select value={toHour} onChange={(e) => setToHour(Number(e.target.value))} className="mt-1 block rounded-md border border-navy/20 px-2 py-1.5 text-sm">
+                      {hourOptions(bounds.open + 1, bounds.close).map((h) => <option key={h} value={h}>{h}:00</option>)}
+                    </select>
+                  </label>
+                </div>
+              )}
+              <button type="button" onClick={addDays} disabled={selectedResources.length === 0 || days.length === 0 || !bounds || adding}
+                className="rounded-md border border-pitch bg-pitch/10 px-4 py-2 text-sm font-bold uppercase tracking-wide text-pitch-deep hover:bg-pitch/20 disabled:cursor-not-allowed disabled:opacity-40">
+                {adding ? "Checking…" : `➕ Add ${selectedResources.length && days.length ? selectedResources.length * days.length : ""} session${selectedResources.length * days.length === 1 ? "" : "s"}`}
+              </button>
+              {notice && <p className="max-w-xs rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900 ring-1 ring-amber-200">{notice}</p>}
+            </div>
+          </div>
         </section>
       </div>
 
       {/* Summary / checkout */}
       <aside className="h-fit rounded-2xl bg-navy p-6 text-white lg:sticky lg:top-20">
-        <h2 className="display text-2xl">Your booking</h2>
-        {resource && sortedSelection.length > 0 ? (
+        <h2 className="display text-2xl">Your reservation</h2>
+        {segments.length === 0 ? (
+          <p className="mt-4 text-sm text-white/60">Select grounds, days, and an hour range, then add them.</p>
+        ) : (
           <>
-            <dl className="mt-4 space-y-2 text-sm">
-              <div className="flex justify-between gap-4">
-                <dt className="text-white/60">Facility</dt>
-                <dd className="text-right font-medium">{resource.name}</dd>
-              </div>
-              <div className="flex justify-between gap-4">
-                <dt className="text-white/60">Date</dt>
-                <dd className="font-medium">{date}</dd>
-              </div>
-              <div className="flex justify-between gap-4">
-                <dt className="text-white/60">Time</dt>
-                <dd className="font-medium">
-                  {formatHour(sortedSelection[0])} – {formatHour(sortedSelection[sortedSelection.length - 1] + 1)}
-                </dd>
-              </div>
-              <div className="flex justify-between gap-4 border-t border-white/15 pt-2 text-base">
-                <dt className="font-semibold">Total</dt>
-                <dd className="font-bold text-pitch">{money(total)}</dd>
-              </div>
-            </dl>
-            <form
-              action={createBooking}
-              onSubmit={() => setSubmitting(true)}
-              className="mt-5"
-            >
-              <input type="hidden" name="resourceId" value={resource.id} />
-              <input type="hidden" name="date" value={date} />
-              <input type="hidden" name="hours" value={JSON.stringify(sortedSelection)} />
-              <button
-                type="submit"
-                disabled={submitting}
-                className="btn-brand w-full rounded-md px-4 py-3 uppercase tracking-wide disabled:opacity-60"
-              >
-                {submitting ? "Processing…" : "Confirm & Pay"}
+            <ul className="mt-4 space-y-2">
+              {segments.map((s, i) => (
+                <li key={`${s.resourceId}-${s.date}`} className="rounded-lg bg-white/5 p-3 text-sm">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="font-semibold">{s.resourceName}</div>
+                      <div className="text-white/60">{s.date} · {fmtHour(s.hours[0])}–{fmtHour(s.hours[s.hours.length - 1] + 1)}</div>
+                    </div>
+                    <div className="flex flex-col items-end gap-1">
+                      <span className="font-semibold text-pitch">{money(s.subtotal)}</span>
+                      <button type="button" onClick={() => setSegments((p) => p.filter((_, x) => x !== i))} className="text-xs text-white/50 hover:text-white">✕ remove</button>
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <div className="mt-4 flex justify-between border-t border-white/15 pt-3 text-base">
+              <span className="font-semibold">Total</span>
+              <span className="font-bold text-pitch">{money(grandTotal)}</span>
+            </div>
+            <form action={createReservation} onSubmit={() => setSubmitting(true)} className="mt-4 space-y-3">
+              <label className="block text-xs text-white/70">
+                Organization / entity (optional)
+                <input name="label" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Argyle Cricket Club"
+                  className="mt-1 w-full rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm text-white placeholder:text-white/40 focus:border-pitch focus:outline-none" />
+              </label>
+              <input type="hidden" name="segments" value={JSON.stringify(submitSegments)} />
+              <button type="submit" disabled={submitting || submitSegments.length === 0}
+                className="btn-brand w-full rounded-md px-4 py-3 uppercase tracking-wide disabled:opacity-60">
+                {submitting ? "Processing…" : `Confirm & Pay ${money(grandTotal)}`}
               </button>
             </form>
             {isMockPayments && (
-              <p className="mt-3 rounded-md bg-sky/20 px-3 py-2 text-xs text-white/90">
-                Test mode — payment is simulated, no card is charged. Stripe goes
-                live when the owner flips <code>PAYMENTS_PROVIDER=stripe</code>.
-              </p>
+              <p className="mt-3 rounded-md bg-sky/20 px-3 py-2 text-xs text-white/90">Test mode — payment is simulated, no card is charged.</p>
             )}
           </>
-        ) : (
-          <p className="mt-4 text-sm text-white/60">
-            Select a facility, date, and at least one hour to see your total.
-          </p>
         )}
       </aside>
     </div>

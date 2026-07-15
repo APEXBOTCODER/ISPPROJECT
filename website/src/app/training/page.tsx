@@ -1,5 +1,5 @@
 import Link from "next/link";
-import PhotoPlaceholder from "@/components/PhotoPlaceholder";
+import SiteImage from "@/components/SiteImage";
 
 export const metadata = { title: "Training & Coaching" };
 
@@ -33,7 +33,7 @@ export default function TrainingPage() {
         year-round — rain or shine, summer or winter.
       </p>
 
-      <PhotoPlaceholder label="Indoor training facility" className="mt-8 h-64 w-full" variant="navy" />
+      <SiteImage slot="training-hero" label="Indoor training facility" className="mt-8 h-64 w-full" variant="navy" />
 
       <div className="mt-10 grid gap-5 sm:grid-cols-2">
         {programs.map((p) => (

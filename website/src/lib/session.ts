@@ -14,3 +14,10 @@ export async function requireStaff() {
   if (user.role !== "STAFF" && user.role !== "ADMIN") redirect("/");
   return user;
 }
+
+/** Server-side guard for sensitive admin actions: ADMIN role only. */
+export async function requireAdmin() {
+  const user = await requireUser();
+  if (user.role !== "ADMIN") redirect("/admin");
+  return user;
+}

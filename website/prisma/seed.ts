@@ -98,6 +98,29 @@ const resources = [
   },
 ];
 
+const tournaments = [
+  {
+    name: "Grand Opening Cup — T10 Cricket",
+    timing: "Summer 2026 · opening weekend",
+    description:
+      "16-team tape-ball tournament to christen the grounds. Trophies, food trucks, family zone.",
+    sortOrder: 1,
+  },
+  {
+    name: "Infinity Soccer League — Season 1",
+    timing: "Fall 2026",
+    description: "7v7 league across two divisions. 8 match guarantee plus playoffs.",
+    sortOrder: 2,
+  },
+  {
+    name: "Corporate Sports Day",
+    timing: "Dates on request",
+    description:
+      "Private park hire for company events — cricket, soccer, and field games with catering options.",
+    sortOrder: 3,
+  },
+];
+
 const waiverBody = `RELEASE AND WAIVER OF LIABILITY — INFINITY SPORTS PARK
 
 [DRAFT — PLACEHOLDER TEXT. This document has NOT been reviewed by an attorney
@@ -133,6 +156,11 @@ async function main() {
       update: resource,
       create: resource,
     });
+  }
+
+  // Tournaments have no natural unique key — seed once when the table is empty.
+  if ((await prisma.tournament.count()) === 0) {
+    await prisma.tournament.createMany({ data: tournaments });
   }
 
   await prisma.waiverDocument.upsert({

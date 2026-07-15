@@ -5,8 +5,6 @@
 export const config = {
   siteName: "Infinity Sports Park",
   tagline: "Where Passion Meets Performance",
-  launchLabel: "Launching Summer 2026",
-  location: "Near Argyle, Texas — 10 mins from Argyle Chowrastha",
   timezone: "America/Chicago",
 
   siteUrl: process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000",
@@ -33,6 +31,12 @@ export const config = {
 
   /** How many days ahead customers may book. */
   advanceBookingDays: 60,
+
+  /** Max contiguous hours in a single day-segment of a reservation. */
+  maxHoursPerSegment: 12,
+
+  /** Max day-segments in one multi-day reservation. */
+  maxSegmentsPerReservation: 30,
 
   cancellationPolicy: {
     fullRefundHours: 48,

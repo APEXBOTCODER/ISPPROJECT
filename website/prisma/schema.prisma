@@ -16,6 +16,7 @@ model User {
   name          String
   phone         String?
   role          String    @default("CUSTOMER") // CUSTOMER | STAFF | ADMIN
+  active        Boolean   @default(true) // deactivated users can't log in or book
   emailVerified DateTime?
   phoneVerified DateTime?
   image         String?
@@ -23,8 +24,56 @@ model User {
   updatedAt     DateTime  @updatedAt
 
   bookings          Booking[]
+  reservations      Reservation[]
   waiverSignatures  WaiverSignature[]
   verificationCodes VerificationCode[]
+  refundsReceived   RefundRecord[]     @relation("UserRefunds")
+  refundsIssued     RefundRecord[]     @relation("StaffRefunds")
+}
+
+// Audit trail for every refund (and the source of truth for a user's total
+// refunded amount, which caps custom refunds). Append-only.
+model RefundRecord {
+  id            String   @id @default(cuid())
+  userId        String // the customer refunded
+  staffId       String // who issued it (the customer themselves for self-cancels)
+  reservationId String?
+  bookingId     String?
+  scope         String // SEGMENT | RESERVATION | CUSTOM
+  amountCents   Int
+  cancelled     Boolean  @default(false) // did it also cancel the booking + free slots
+  reason        String
+  paymentRef    String?
+  createdAt     DateTime @default(now())
+
+  user  User @relation("UserRefunds", fields: [userId], references: [id])
+  staff User @relation("StaffRefunds", fields: [staffId], references: [id])
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+// Groups one or more Booking rows paid/managed together — a multi-day booking
+// (kind=BOOKING, one payment across all day-segments) or a multi-day
+// maintenance block (kind=BLOCK). A single-day booking is just a reservation
+// with one Booking.
+model Reservation {
+  id            String   @id @default(cuid())
+  userId        String
+  kind          String   @default("BOOKING") // BOOKING | BLOCK
+  label         String? // entity/org name (bookings) or reason (blocks)
+  totalCents    Int      @default(0)
+  refundedCents Int      @default(0)
+  paymentRef    String?
+  status        String   @default("CONFIRMED") // PENDING | CONFIRMED | CANCELLED
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id])
+  bookings Booking[]
+
+  @@index([userId])
 }
 
 // Short-lived 6-digit codes for email/phone ownership verification.
@@ -64,25 +113,30 @@ model Resource {
 // Maintenance blocks are bookings with status BLOCKED (created by staff), so they
 // occupy slots through the same unique constraint as customer bookings.
 model Booking {
-  id         String   @id @default(cuid())
-  userId     String
-  resourceId String
-  date       String // YYYY-MM-DD, park-local
-  startHour  Int
-  endHour    Int // exclusive
-  status     String   @default("PENDING") // PENDING | CONFIRMED | CANCELLED | BLOCKED
-  totalCents Int      @default(0)
-  paymentRef String?
-  notes      String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id            String   @id @default(cuid())
+  userId        String
+  reservationId String? // groups multi-day bookings / blocks (null for legacy rows)
+  resourceId    String
+  date          String // YYYY-MM-DD, park-local
+  startHour     Int
+  endHour       Int // exclusive
+  status        String   @default("PENDING") // PENDING | CONFIRMED | CANCELLED | BLOCKED
+  totalCents    Int      @default(0)
+  refundedCents Int      @default(0)
+  noShow        Boolean  @default(false) // staff-flagged no-show (past confirmed bookings)
+  paymentRef    String?
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  user     User          @relation(fields: [userId], references: [id])
-  resource Resource      @relation(fields: [resourceId], references: [id])
-  slots    BookingSlot[]
+  user        User          @relation(fields: [userId], references: [id])
+  reservation Reservation?  @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  resource    Resource      @relation(fields: [resourceId], references: [id])
+  slots       BookingSlot[]
 
   @@index([userId, date])
   @@index([resourceId, date])
+  @@index([reservationId])
 }
 
 // One row per occupied hour. The unique constraint is the double-booking guard:
@@ -96,6 +150,39 @@ model BookingSlot {
   booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
 
   @@unique([resourceId, slotKey])
+}
+
+// Admin-managed events shown on /tournaments (replaces the former static array).
+model Tournament {
+  id          String   @id @default(cuid())
+  name        String
+  timing      String // e.g. "Summer 2026 · opening weekend"
+  description String
+  ctaLabel    String   @default("Register interest")
+  active      Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// Uploaded images, stored in the database so they persist identically in dev
+// (SQLite BLOB) and production (Postgres bytea) with no external object store.
+// Keyed by a fixed registry slot (see src/lib/media.ts).
+model MediaAsset {
+  slot      String   @id
+  mimeType  String
+  data      Bytes
+  alt       String   @default("")
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+}
+
+// Editable page copy / toggles (key-value). Defaults live in src/lib/settings.ts;
+// a row here overrides the default.
+model SiteSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
 }
 
 model WaiverDocument {
@@ -120,10 +207,25 @@ model WaiverSignature {
   minorDob         String?
   guardianRelation String?
   ipAddress        String
+  userAgent        String?
+  consentEsign     Boolean  @default(false) // ESIGN/UETA electronic-signature consent
+  pdfSha256        String? // SHA-256 of the sealed PDF (tamper-evidence)
+  emailedAt        DateTime?
   signedAt         DateTime @default(now())
 
   user     User           @relation(fields: [userId], references: [id])
   document WaiverDocument @relation(fields: [documentId], references: [id])
+  pdf      WaiverPdf?
 
   @@index([userId, version])
+}
+
+// The sealed PDF rendered at signing time — the immutable evidentiary artifact.
+// Bytes live in their own table so signature queries don't load them.
+model WaiverPdf {
+  signatureId String   @id
+  data        Bytes
+  createdAt   DateTime @default(now())
+
+  signature WaiverSignature @relation(fields: [signatureId], references: [id], onDelete: Cascade)
 }

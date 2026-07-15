@@ -1,5 +1,3 @@
-import { config } from "@/lib/config";
-
 export const metadata = { title: "Contact" };
 
 export default function ContactPage() {
@@ -29,7 +27,7 @@ export default function ContactPage() {
         </div>
         <div className="rounded-2xl border border-navy/10 p-6 sm:col-span-2">
           <h2 className="display text-xl text-navy">Visit</h2>
-          <p className="mt-2 text-sm text-navy/70">{config.location}. Exact address announced closer to launch.</p>
+          <p className="mt-2 text-sm text-navy/70">Exact address announced closer to launch.</p>
         </div>
       </div>
 

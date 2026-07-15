@@ -1,11 +1,12 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
-import { config } from "@/lib/config";
 import { formatCents } from "@/lib/pricing";
 import { parkNow } from "@/lib/availability";
 import { getCurrentWaiver } from "@/lib/waiver";
-import { cancelBooking, logoutAction } from "./actions";
+import { getBookingPolicy } from "@/lib/policy";
+import { cancelBooking, cancelReservation, logoutAction } from "./actions";
+import { emailSignedWaiver } from "@/app/waiver/actions";
 
 export const metadata = { title: "My Account" };
 export const dynamic = "force-dynamic";
@@ -19,13 +20,13 @@ const statusStyles: Record<string, string> = {
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; cancelled?: string }>;
+  searchParams: Promise<{ error?: string; cancelled?: string; waiverEmailed?: string }>;
 }) {
   const user = await requireUser();
-  const { error, cancelled } = await searchParams;
+  const { error, cancelled, waiverEmailed } = await searchParams;
   const now = parkNow();
 
-  const [bookings, signatures, currentWaiver, dbUser] = await Promise.all([
+  const [bookings, signatures, currentWaiver, dbUser, policy] = await Promise.all([
     prisma.booking.findMany({
       where: { userId: user.id, status: { not: "BLOCKED" } },
       include: { resource: true },
@@ -38,6 +39,7 @@ export default async function DashboardPage({
     }),
     getCurrentWaiver(),
     prisma.user.findUnique({ where: { id: user.id } }),
+    getBookingPolicy(),
   ]);
 
   const upcoming = bookings.filter(
@@ -47,6 +49,21 @@ export default async function DashboardPage({
   );
   const past = bookings.filter((b) => !upcoming.includes(b));
   const waiverCurrent = signatures.some((s) => s.version === currentWaiver?.version);
+
+  // Group upcoming bookings that belong to a multi-day reservation; standalone
+  // bookings (reservationId null) render individually.
+  type BookingRow = (typeof upcoming)[number];
+  const reservationGroups = new Map<string, BookingRow[]>();
+  const singleBookings: BookingRow[] = [];
+  for (const b of upcoming) {
+    if (b.reservationId) {
+      const arr = reservationGroups.get(b.reservationId) ?? [];
+      arr.push(b);
+      reservationGroups.set(b.reservationId, arr);
+    } else {
+      singleBookings.push(b);
+    }
+  }
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-10">
@@ -72,6 +89,11 @@ export default async function DashboardPage({
       {cancelled && (
         <p className="mt-4 rounded-md bg-green-50 px-4 py-3 text-sm text-green-800 ring-1 ring-green-200">
           Booking cancelled. Any refund per policy has been processed — check your email.
+        </p>
+      )}
+      {waiverEmailed && (
+        <p className="mt-4 rounded-md bg-green-50 px-4 py-3 text-sm text-green-800 ring-1 ring-green-200">
+          Your signed waiver PDF has been emailed to you.
         </p>
       )}
       {error && (
@@ -129,12 +151,27 @@ export default async function DashboardPage({
           )}
         </div>
         {signatures.length > 0 && (
-          <ul className="mt-3 space-y-1 text-xs text-navy/60">
+          <ul className="mt-3 space-y-2 text-xs text-navy/60">
             {signatures.map((s) => (
-              <li key={s.id}>
-                v{s.version} · {s.participantName}
-                {s.guardianRelation ? ` (minor — signed by ${s.signedName})` : ""} ·{" "}
-                {s.signedAt.toISOString().slice(0, 10)}
+              <li key={s.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-navy/[0.03] px-3 py-2">
+                <span>
+                  v{s.version} · {s.participantName}
+                  {s.guardianRelation ? ` (minor — signed by ${s.signedName})` : ""} ·{" "}
+                  {s.signedAt.toISOString().slice(0, 10)}
+                  {s.emailedAt && (
+                    <span className="ml-1 text-navy/40">· emailed {s.emailedAt.toISOString().slice(0, 10)}</span>
+                  )}
+                </span>
+                <span className="flex items-center gap-2">
+                  <a href={`/api/waiver/pdf/${s.id}`} className="font-semibold text-sky hover:underline">
+                    Download PDF
+                  </a>
+                  <form action={emailSignedWaiver}>
+                    <input type="hidden" name="signatureId" value={s.id} />
+                    <input type="hidden" name="returnTo" value="/dashboard" />
+                    <button className="font-semibold text-sky hover:underline">Email me a copy</button>
+                  </form>
+                </span>
               </li>
             ))}
           </ul>
@@ -152,9 +189,61 @@ export default async function DashboardPage({
             </Link>
           </p>
         ) : (
-          <ul className="mt-4 space-y-3">
-            {upcoming.map((b) => (
-              <li
+          <div className="mt-4 space-y-4">
+            {/* Multi-day reservations */}
+            {Array.from(reservationGroups.entries()).map(([reservationId, group]) => {
+              const multi = group.length > 1;
+              const hasActive = group.some((b) => b.status === "CONFIRMED");
+              return (
+                <div key={reservationId} className="rounded-xl border border-navy/10 p-4">
+                  {multi && (
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-navy/10 pb-2">
+                      <span className="text-sm font-semibold text-navy">
+                        Reservation · {group.length} sessions
+                      </span>
+                      {hasActive && (
+                        <form action={cancelReservation}>
+                          <input type="hidden" name="reservationId" value={reservationId} />
+                          <button className="rounded-md border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50">
+                            Cancel entire reservation
+                          </button>
+                        </form>
+                      )}
+                    </div>
+                  )}
+                  <ul className="space-y-2">
+                    {group.map((b) => (
+                      <li key={b.id} className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <div className="font-bold text-navy">{b.resource.name}</div>
+                          <div className="text-sm text-navy/60">
+                            {b.date} · {b.startHour}:00–{b.endHour}:00 (US Central) ·{" "}
+                            {formatCents(b.totalCents)}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className={`rounded-full px-3 py-1 text-xs font-semibold ring-1 ${statusStyles[b.status] ?? statusStyles.CANCELLED}`}>
+                            {b.status}
+                          </span>
+                          {b.status === "CONFIRMED" && (
+                            <form action={cancelBooking}>
+                              <input type="hidden" name="bookingId" value={b.id} />
+                              <button className="rounded-md border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50">
+                                Cancel
+                              </button>
+                            </form>
+                          )}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              );
+            })}
+
+            {/* Standalone bookings */}
+            {singleBookings.map((b) => (
+              <div
                 key={b.id}
                 className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-navy/10 p-4"
               >
@@ -166,9 +255,7 @@ export default async function DashboardPage({
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
-                  <span
-                    className={`rounded-full px-3 py-1 text-xs font-semibold ring-1 ${statusStyles[b.status] ?? statusStyles.CANCELLED}`}
-                  >
+                  <span className={`rounded-full px-3 py-1 text-xs font-semibold ring-1 ${statusStyles[b.status] ?? statusStyles.CANCELLED}`}>
                     {b.status}
                   </span>
                   {b.status === "CONFIRMED" && (
@@ -180,14 +267,14 @@ export default async function DashboardPage({
                     </form>
                   )}
                 </div>
-              </li>
+              </div>
             ))}
-          </ul>
+          </div>
         )}
         <p className="mt-3 text-xs text-navy/50">
-          Cancellation policy: full refund {config.cancellationPolicy.fullRefundHours}+ hours ahead,
-          50% refund {config.cancellationPolicy.halfRefundHours}–{config.cancellationPolicy.fullRefundHours} hours,
-          no refund inside {config.cancellationPolicy.halfRefundHours} hours.
+          Cancellation policy: full refund {policy.fullRefundHours}+ hours ahead,
+          50% refund {policy.halfRefundHours}–{policy.fullRefundHours} hours,
+          no refund inside {policy.halfRefundHours} hours.
         </p>
       </section>
 

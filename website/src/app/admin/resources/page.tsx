@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { requireStaff } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import {
@@ -132,13 +131,8 @@ export default async function AdminResourcesPage({
   });
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-10">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="display text-4xl text-navy">Admin · Facilities</h1>
-        <Link href="/admin" className="text-sm font-semibold text-sky hover:underline">
-          ← Back to operations
-        </Link>
-      </div>
+    <div>
+      <h1 className="display text-4xl text-navy">Facilities &amp; pricing</h1>
       <p className="mt-2 text-sm text-navy/60">
         Changes apply immediately to the booking page, facilities page, and pricing
         table. Deactivate (don&apos;t delete) anything with booking history.

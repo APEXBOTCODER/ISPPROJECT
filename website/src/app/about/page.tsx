@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { config } from "@/lib/config";
-import PhotoPlaceholder from "@/components/PhotoPlaceholder";
+import SiteImage from "@/components/SiteImage";
 
 export const metadata = { title: "About" };
 
@@ -37,15 +37,14 @@ export default function AboutPage() {
           </p>
         </div>
         <div className="space-y-4">
-          <PhotoPlaceholder label="The grounds, summer 2026" className="h-48" variant="field" />
-          <PhotoPlaceholder label="Argyle Cricket Club" className="h-48" variant="navy" />
+          <SiteImage slot="about-1" label="The grounds, summer 2026" className="h-48 w-full" variant="field" />
+          <SiteImage slot="about-2" label="Argyle Cricket Club" className="h-48 w-full" variant="navy" />
         </div>
       </div>
 
       {/* Location */}
       <section className="mt-12 rounded-2xl border border-navy/10 p-6">
         <h2 className="display text-2xl text-navy">Find us</h2>
-        <p className="mt-2 text-sm text-navy/70">{config.location}.</p>
         <div className="mt-4 flex h-64 items-center justify-center rounded-xl bg-navy/5 text-sm text-navy/50">
           {/* Swap for an embedded Google Map once the street address is final — README §Domain & launch */}
           Interactive map coming soon — exact address announced closer to launch.
