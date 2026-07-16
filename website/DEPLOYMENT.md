@@ -175,6 +175,44 @@ backs up everything.
 - **Retention note:** signed waivers are legal records. Keep backups for **years**,
   not days, and never hard-delete signature/PDF rows (the schema is append-only).
 
+### Inspecting the database (tables & rows)
+
+The full schema (every table + column) lives in
+[`prisma/schema.prisma`](prisma/schema.prisma). Main tables: `User`, `Reservation`,
+`Booking`, `BookingSlot`, `RefundRecord`, `WaiverDocument`, `WaiverSignature`,
+`WaiverPdf`, `Resource`, `Tournament`, `SiteSetting`, `MediaAsset`, `VerificationCode`.
+
+Three ways to look inside:
+
+1. **Prisma Studio (easiest — a visual table browser in your browser):**
+   ```bash
+   cd website
+   npm run db:studio      # opens http://localhost:5555
+   ```
+   Browse/filter/edit any table. Works against whatever `DATABASE_URL` points to
+   (dev SQLite or prod Postgres).
+
+2. **SQLite CLI (Option A / the Lightsail server):**
+   ```bash
+   sqlite3 /home/ubuntu/data/prod.db     # or ./prisma/dev.db locally
+   .tables                                # list all tables
+   .schema Booking                        # show a table's columns
+   SELECT COUNT(*) FROM "Booking";        # query rows
+   .quit
+   ```
+
+3. **Postgres CLI (Option B/C):**
+   ```bash
+   psql "$DATABASE_URL"
+   \dt                                    # list tables
+   \d "Booking"                           # describe a table
+   SELECT COUNT(*) FROM "Booking";
+   \q
+   ```
+
+> Prefer read-only queries in production. Never hand-edit `WaiverSignature` /
+> `WaiverPdf` rows — they are tamper-evident legal records.
+
 ---
 
 ## 7. Going fully live — remaining decisions

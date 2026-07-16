@@ -2,10 +2,12 @@
 
 import { redirect } from "next/navigation";
 import { z } from "zod";
+import bcrypt from "bcryptjs";
 import { requireAdmin } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 
 const roleSchema = z.enum(["CUSTOMER", "STAFF", "ADMIN"]);
+const passwordSchema = z.string().min(8, "Temporary password must be at least 8 characters.").max(100);
 
 function back(userId: string, params: Record<string, string>): never {
   redirect(`/admin/users/${userId}?` + new URLSearchParams(params).toString());
@@ -39,6 +41,26 @@ export async function setUserActive(formData: FormData) {
 
   await prisma.user.update({ where: { id: userId }, data: { active } });
   back(userId, { ok: active ? "Account reactivated." : "Account deactivated — the user can no longer sign in or book." });
+}
+
+/**
+ * Reset a user's login by setting a new temporary password. ADMIN-only.
+ * Use when a user is locked out / forgot their password: set a temp password,
+ * share it with them securely, and they can sign in immediately. Also gives a
+ * password to accounts that only had social sign-in.
+ */
+export async function resetUserPassword(formData: FormData) {
+  await requireAdmin();
+  const userId = String(formData.get("userId") ?? "");
+  if (!userId) redirect("/admin/users");
+  const parsed = passwordSchema.safeParse(String(formData.get("password") ?? ""));
+  if (!parsed.success) back(userId, { error: parsed.error.issues[0]?.message ?? "Invalid password." });
+
+  const passwordHash = await bcrypt.hash(parsed.data, 12);
+  await prisma.user.update({ where: { id: userId }, data: { passwordHash } });
+  back(userId, {
+    ok: "Password reset. Share the temporary password with the user — they can sign in with it now.",
+  });
 }
 
 /** Manually set/clear a user's email verification. ADMIN-only. */

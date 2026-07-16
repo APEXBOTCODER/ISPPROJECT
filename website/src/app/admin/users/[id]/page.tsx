@@ -4,7 +4,7 @@ import { requireStaff } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { formatCents } from "@/lib/pricing";
 import { userRefundCapCents } from "@/lib/reservations";
-import { setUserRole, setManualVerified, setUserActive } from "../actions";
+import { setUserRole, setManualVerified, setUserActive, resetUserPassword } from "../actions";
 
 export const metadata = { title: "Admin · User" };
 export const dynamic = "force-dynamic";
@@ -147,6 +147,49 @@ export default async function AdminUserDetailPage({
             <p className="mt-2 text-xs text-navy/50">Admin-only.</p>
           )}
         </div>
+      </section>
+
+      {/* Login & password */}
+      <section className="mt-6 rounded-2xl border border-navy/10 p-5">
+        <h2 className="display text-xl text-navy">Login &amp; access</h2>
+        <p className="mt-1 text-sm text-navy/60">
+          Can&apos;t sign in? A login fails when the password is wrong, the account is deactivated, or the
+          account only ever used social sign-in (no password). Fixes:
+        </p>
+        <ul className="mt-2 list-disc space-y-0.5 pl-5 text-sm text-navy/70">
+          <li>
+            Account status: <strong>{user.active ? "Active" : "Deactivated"}</strong>
+            {!user.active && " — reactivate it above."}
+          </li>
+          <li>Password login: <strong>{user.passwordHash ? "Set" : "Not set"}</strong> — reset a temporary password below.</li>
+        </ul>
+
+        {isAdmin ? (
+          <form action={resetUserPassword} className="mt-4 flex flex-wrap items-end gap-2">
+            <input type="hidden" name="userId" value={user.id} />
+            <label className="text-xs font-semibold uppercase tracking-wide text-navy/60">
+              New temporary password
+              <input
+                name="password"
+                type="text"
+                minLength={8}
+                required
+                autoComplete="off"
+                placeholder="e.g. Temp-1234"
+                className="mt-1 block w-64 rounded-md border border-navy/20 px-3 py-2 text-sm focus:border-sky focus:outline-none focus:ring-2 focus:ring-sky/30"
+              />
+            </label>
+            <button className="rounded-md border border-navy/20 px-4 py-2 text-sm font-semibold text-navy hover:bg-navy/5">
+              Reset password
+            </button>
+          </form>
+        ) : (
+          <p className="mt-3 text-xs text-navy/50">Resetting a password is admin-only.</p>
+        )}
+        <p className="mt-2 text-xs text-navy/50">
+          Share the temporary password with the user over a trusted channel. It&apos;s shown in plain text so
+          you can pass it on; ask them to change it after signing in.
+        </p>
       </section>
 
       {/* Reservations */}
