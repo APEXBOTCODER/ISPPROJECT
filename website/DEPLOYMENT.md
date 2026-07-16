@@ -18,7 +18,7 @@ email, PDF downloads, custom domain, and security hardening.
 |---|---|---|---|---|
 | **A. Railway** (recommended) | Lowest | ~$5/mo + trial credit | SQLite on a volume (your code, unchanged) | Fastest path to live. Single facility, normal traffic. |
 | **B. Vercel + Neon Postgres** | Medium | Free tier to start | Managed Postgres | Best long-term scaling; requires a one-time Postgres switch (§Option B). |
-| **C. AWS Lightsail** | Higher | ~$10–15/mo | Postgres (RDS) or SQLite on the instance | You specifically want to stay in AWS. |
+| **C. All-AWS (Lightsail + SES + SNS)** | Higher | ~$5–6/mo | SQLite on the instance disk | You want everything inside AWS. See §Option C. |
 
 Your app was built on **SQLite**, so **Option A keeps everything exactly as-is** and
 is the easiest. Postgres (Options B/C) scales further and gives managed backups, at
@@ -62,11 +62,13 @@ Set these in your host's dashboard (never commit them). Full annotated template:
 | `AUTH_SECRET` | ✅ | output of `npx auth secret` |
 | `AUTH_TRUST_HOST` | ✅ (non-Vercel) | `true` |
 | `NEXT_PUBLIC_SITE_URL` | ✅ | `https://infinitysportspark.com` |
-| `EMAIL_PROVIDER` | ✅ | `resend` |
-| `RESEND_API_KEY` | ✅ | from Resend (§4) |
-| `EMAIL_FROM` | ✅ | `Infinity Sports Park <no-reply@infinitysportspark.com>` |
+| `EMAIL_PROVIDER` | ✅ | `resend` **or** `ses` |
+| `RESEND_API_KEY` | if Resend | from Resend (§4) |
+| `EMAIL_FROM` | ✅ | `Infinity Sports Park <no-reply@infinitysportspark.com>` (verified sender) |
+| `AWS_REGION` | if SES/SNS | e.g. `us-east-1` (region where SES is verified) |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | if SES/SNS **and not** on an AWS IAM role | IAM user with `ses:SendRawEmail` + `sns:Publish` |
 | `LEGAL_REVIEWED` | recommended | `true` **after** an attorney approves the waiver text (until then PDFs are watermarked `DRAFT`) |
-| `SMS_PROVIDER` | optional | leave `console` (phone verification is optional) |
+| `SMS_PROVIDER` | optional | `console` (default), or `sns` for AWS SMS |
 | `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` | optional | enables "Continue with Google" |
 | `PAYMENTS_PROVIDER` | optional | leave `mock` until you wire Stripe (§7) |
 
@@ -116,9 +118,13 @@ Keeps your exact codebase. ~10 minutes.
 
 ---
 
-## 4. Email setup (Resend) — required for verification codes & waiver emails
+## 4. Email setup — required for verification codes & waiver emails
 
-Until this is done, codes/emails only print to the server log.
+Two providers are wired in `src/lib/email.ts`: **Resend** (simplest) and **Amazon
+SES** (all-AWS — see §Option C for SES setup). Pick one. Until email is configured,
+codes/emails only print to the server log. Both handle the waiver-PDF attachment.
+
+### Resend
 
 1. Create an account at <https://resend.com>.
 2. **Domains → Add Domain → `infinitysportspark.com`.** Resend shows a set of DNS
@@ -286,22 +292,103 @@ you move to managed Postgres. One-time code change, then git-push deploys foreve
 
 ---
 
-## Option C — AWS (Lightsail)
+## Option C — All-AWS (Lightsail instance + SES + SNS)
 
-If you must stay in AWS, the low-friction route is **Lightsail Containers**:
+Everything inside AWS, keeping your SQLite code. Amazon **SES** (email) and **SNS**
+(SMS) are already wired in `src/lib/email.ts` / `src/lib/sms.ts` — you just create
+the AWS resources and set env vars.
 
-1. Build/push the app as a container (add a `Dockerfile` running `next build` +
-   `next start`), or use **Lightsail's "Deploy from image"**.
-2. **Database:** create a **Lightsail Managed Database (PostgreSQL)** or small **RDS
-   Postgres**, then apply the **Option B** Postgres switch and set `DATABASE_URL` to
-   the RDS endpoint (`?sslmode=require`).
-3. Set all env vars (§2) in the container service configuration.
-4. Lightsail issues TLS and gives you domain-attach + DNS instructions (§5).
-5. Backups: enable RDS/Managed-DB automated snapshots (§6).
+### C.1 Roughly what it costs at low traffic
 
-AWS Amplify Hosting also works but is likewise serverless (Postgres required, same
-Option B switch). EC2 + Nginx + PM2 is possible but is the most operational work and
-is not recommended for "easy + low cost."
+| Service | Purpose | ~Monthly |
+|---|---|---|
+| **Lightsail instance** (1 GB) | Runs the app + SQLite on its persistent disk | **$5** (2 GB = $10) |
+| **SES** | Email | ~**$0** ($0.10 per 1,000 emails) |
+| **SNS** | SMS (optional) | ~**$0** (~$0.0075 per US SMS) + 10DLC fees, see C.6 |
+| **Route 53** | DNS (optional; can keep your registrar) | **$0.50** per hosted zone |
+| **Data transfer** | Included allowance covers low traffic | $0 |
+
+≈ **$5–6/mo.** (RDS/Aurora would add ~$12–43/mo — not needed with SQLite.)
+
+### C.2 Create an IAM identity for the app
+
+Least-privilege permissions — attach this policy to an **IAM role** (if the app runs
+on Lightsail/EC2) or an **IAM user** (if it runs elsewhere; then set
+`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Effect": "Allow", "Action": ["ses:SendRawEmail", "ses:SendEmail"], "Resource": "*" },
+    { "Effect": "Allow", "Action": ["sns:Publish"], "Resource": "*" }
+  ]
+}
+```
+
+### C.3 Amazon SES (email)
+
+1. SES console → **Verified identities → Create identity → Domain** →
+   `infinitysportspark.com`. SES gives DKIM `CNAME` records — add them at your
+   registrar (or Route 53). Wait for **Verified**.
+2. **Leave the SES sandbox:** by default SES only sends to verified addresses and is
+   capped. **Account dashboard → Request production access** (a short form, usually
+   approved within 24 h).
+3. Set env vars on the app:
+   ```
+   EMAIL_PROVIDER=ses
+   EMAIL_FROM=Infinity Sports Park <no-reply@infinitysportspark.com>
+   AWS_REGION=us-east-1          # the region where you verified SES
+   ```
+   No API key — SES uses the IAM role/user from C.2.
+
+### C.4 Amazon SNS (SMS) — optional
+
+Phone verification is **optional** for booking, so you can skip this and leave
+`SMS_PROVIDER=console`. To enable real texts:
+```
+SMS_PROVIDER=sns
+AWS_REGION=us-east-1
+```
+Uses the same IAM identity (`sns:Publish`). Numbers must be **E.164** (`+1972…`).
+
+> **US SMS gotcha:** sending to US mobile numbers requires **A2P 10DLC** registration
+> (a brand + campaign in the SNS/AWS End User Messaging console) or a verified
+> toll-free number. It can take a few days to ~2 weeks and carries small fees
+> (~$2/mo campaign + one-time vetting). Start early, or defer SMS entirely.
+
+### C.5 Compute: Lightsail instance + SQLite
+
+1. Lightsail → **Create instance → Linux → Node.js blueprint** (or plain Ubuntu),
+   **$5/mo (1 GB)** plan, in your SES region.
+2. SSH in; clone the repo, `cd website`, `npm ci`, `npx prisma generate`,
+   `npm run build`.
+3. Create `.env` (or export env) with everything from §2 plus the AWS vars above,
+   and `DATABASE_URL="file:/home/ubuntu/data/prod.db"` (a path on the instance disk).
+4. `npx prisma migrate deploy` then `npm run db:seed` (once).
+5. Run under a process manager so it restarts on reboot/crash:
+   ```bash
+   npm install -g pm2
+   pm2 start "npm run start" --name isp
+   pm2 save && pm2 startup
+   ```
+6. Put **Nginx** in front (reverse-proxy :80/:443 → the app's port) and issue TLS
+   with Lightsail's built-in Let's Encrypt (`bncert-tool` on the Node blueprint) or
+   Certbot. Attach the static IP + domain (§5).
+7. **Attach an IAM role** to the instance (Lightsail: via the AWS-side EC2 role or
+   use an IAM user's keys in `.env`) so SES/SNS calls are authorized.
+
+> The instance's disk is persistent, so SQLite + all uploaded images/waiver PDFs
+> survive reboots. Back it up (§6): snapshot the instance and/or add Litestream.
+
+### C.6 Alternatives within AWS
+
+- **App Runner / Amplify Hosting / ECS Fargate** — managed & auto-deploy, but their
+  filesystems are ephemeral, so they need **Postgres** (apply the Option B switch and
+  point `DATABASE_URL` at **RDS Postgres**). More money and setup than the Lightsail +
+  SQLite path above; choose when you want managed scaling.
+- **Lightsail Containers** — also ephemeral (no persistent volume), so likewise needs
+  RDS. The Lightsail **instance** above is the SQLite-friendly, cheapest choice.
 
 ---
 

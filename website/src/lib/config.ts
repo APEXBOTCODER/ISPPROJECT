@@ -12,11 +12,11 @@ export const config = {
   /** "mock" simulates a successful checkout; "stripe" uses real Stripe keys. */
   paymentsProvider: (process.env.PAYMENTS_PROVIDER ?? "mock") as "mock" | "stripe",
 
-  /** "console" logs outbound email to the server console; "resend" sends real email. */
-  emailProvider: (process.env.EMAIL_PROVIDER ?? "console") as "console" | "resend",
+  /** "console" logs email to the server console; "resend" or "ses" send real email. */
+  emailProvider: (process.env.EMAIL_PROVIDER ?? "console") as "console" | "resend" | "ses",
 
-  /** "console" logs SMS to the server console; "twilio" sends real texts. */
-  smsProvider: (process.env.SMS_PROVIDER ?? "console") as "console" | "twilio",
+  /** "console" logs SMS to the server console; "twilio" or "sns" send real texts. */
+  smsProvider: (process.env.SMS_PROVIDER ?? "console") as "console" | "twilio" | "sns",
 
   /** Google sign-in button renders only when OAuth credentials exist. */
   googleAuthEnabled: Boolean(

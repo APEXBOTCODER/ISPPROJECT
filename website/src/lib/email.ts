@@ -24,22 +24,73 @@ function logEmail(input: { to: string; subject: string; text: string; attachment
   );
 }
 
-/**
- * Email provider abstraction.
- *
- * EMAIL_PROVIDER="console" → emails print to the server console (dev default).
- * EMAIL_PROVIDER="resend"  → real delivery via Resend. Requires RESEND_API_KEY
- *   and EMAIL_FROM (a verified sender on your Resend-verified domain).
- *   See DEPLOYMENT.md §Email.
- */
-export async function sendEmail(input: {
+type EmailInput = {
   to: string;
   subject: string;
   text: string;
   attachments?: EmailAttachment[];
-}): Promise<void> {
-  const resend = config.emailProvider === "resend" ? getResend() : null;
+};
 
+/**
+ * Send via Amazon SES. Uses nodemailer to build a raw MIME message so
+ * attachments (the sealed waiver PDF) are supported, then hands it to SES's
+ * SendRawEmail. Credentials come from the standard AWS chain (env vars or the
+ * instance's IAM role); region from AWS_REGION. See DEPLOYMENT.md §"All-AWS".
+ */
+async function sendViaSes(input: EmailInput, from: string): Promise<void> {
+  const [{ SES, SendRawEmailCommand }, nodemailer] = await Promise.all([
+    import("@aws-sdk/client-ses"),
+    import("nodemailer"),
+  ]);
+  const ses = new SES({ region: process.env.AWS_REGION });
+  // nodemailer's TS types omit the SES transport from createTransport's
+  // overloads, though it is fully supported at runtime.
+  const transporter = nodemailer.default.createTransport({
+    SES: { ses, aws: { SendRawEmailCommand } },
+  } as unknown as Parameters<typeof nodemailer.default.createTransport>[0]);
+  await transporter.sendMail({
+    from,
+    to: input.to,
+    subject: input.subject,
+    text: input.text,
+    attachments: input.attachments?.map((a) => ({
+      filename: a.filename,
+      content: Buffer.from(a.content),
+      contentType: a.contentType,
+    })),
+  });
+}
+
+/**
+ * Email provider abstraction.
+ *
+ * EMAIL_PROVIDER="console" → emails print to the server console (dev default).
+ * EMAIL_PROVIDER="resend"  → real delivery via Resend (needs RESEND_API_KEY).
+ * EMAIL_PROVIDER="ses"     → real delivery via Amazon SES (needs AWS_REGION +
+ *   AWS credentials/role). Both require EMAIL_FROM to be a verified sender on
+ *   your verified domain. See DEPLOYMENT.md §Email.
+ *
+ * A send failure is logged, never thrown — it must not crash a booking/refund/
+ * waiver flow.
+ */
+export async function sendEmail(input: EmailInput): Promise<void> {
+  const from = process.env.EMAIL_FROM;
+
+  if (config.emailProvider === "ses") {
+    if (!from) {
+      console.error("[email] EMAIL_FROM is not set — cannot send via SES. Logging instead.");
+      logEmail(input);
+      return;
+    }
+    try {
+      await sendViaSes(input, from);
+    } catch (err) {
+      console.error("[email] SES error:", err);
+    }
+    return;
+  }
+
+  const resend = config.emailProvider === "resend" ? getResend() : null;
   if (!resend) {
     if (config.emailProvider === "resend") {
       console.warn("[email] EMAIL_PROVIDER=resend but RESEND_API_KEY is unset — logging instead.");
@@ -47,8 +98,6 @@ export async function sendEmail(input: {
     logEmail(input);
     return;
   }
-
-  const from = process.env.EMAIL_FROM;
   if (!from) {
     console.error("[email] EMAIL_FROM is not set — cannot send via Resend. Logging instead.");
     logEmail(input);
@@ -67,10 +116,7 @@ export async function sendEmail(input: {
         contentType: a.contentType,
       })),
     });
-    if (error) {
-      // Never let a mail failure crash a booking/refund/waiver flow.
-      console.error("[email] Resend error:", error);
-    }
+    if (error) console.error("[email] Resend error:", error);
   } catch (err) {
     console.error("[email] Resend threw:", err);
   }
