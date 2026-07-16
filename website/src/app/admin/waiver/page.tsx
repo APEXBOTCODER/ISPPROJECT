@@ -3,7 +3,8 @@ import { requireStaff } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { config } from "@/lib/config";
 import { getCurrentWaiver } from "@/lib/waiver";
-import { publishWaiverVersion, editWaiverDraft } from "./actions";
+import { publishWaiverVersion, editWaiverDraft, requestResign } from "./actions";
+import BulkSelectAll from "@/components/BulkSelectAll";
 
 export const metadata = { title: "Admin · Waiver" };
 export const dynamic = "force-dynamic";
@@ -140,43 +141,70 @@ export default async function AdminWaiverPage({
         {signatures.length === 0 ? (
           <p className="mt-3 text-sm text-navy/60">No signatures yet.</p>
         ) : (
-          <div className="mt-3 overflow-x-auto">
-            <table className="w-full min-w-[820px] text-left text-sm">
-              <thead>
-                <tr className="border-b border-navy/15 text-xs uppercase text-navy/50">
-                  <th className="py-2 pr-4">Signed</th>
-                  <th className="py-2 pr-4">Participant</th>
-                  <th className="py-2 pr-4">Signer / account</th>
-                  <th className="py-2 pr-4">Ver</th>
-                  <th className="py-2 pr-4">IP</th>
-                  <th className="py-2 pr-4">Hash</th>
-                  <th className="py-2 pr-4">Emailed</th>
-                  <th className="py-2">PDF</th>
-                </tr>
-              </thead>
-              <tbody>
-                {signatures.map((s) => (
-                  <tr key={s.id} className="border-b border-navy/5">
-                    <td className="py-2 pr-4 whitespace-nowrap text-navy/60">{s.signedAt.toISOString().slice(0, 16).replace("T", " ")}</td>
-                    <td className="py-2 pr-4 font-medium text-navy">{s.participantName}</td>
-                    <td className="py-2 pr-4">
-                      {s.signedName}
-                      <span className="block text-xs text-navy/50">{s.user.email}</span>
-                    </td>
-                    <td className="py-2 pr-4">v{s.version}</td>
-                    <td className="py-2 pr-4 text-navy/60">{s.ipAddress}</td>
-                    <td className="py-2 pr-4 font-mono text-xs text-navy/50">{s.pdfSha256 ? s.pdfSha256.slice(0, 10) : "—"}</td>
-                    <td className="py-2 pr-4 text-navy/60">{s.emailedAt ? s.emailedAt.toISOString().slice(0, 10) : "—"}</td>
-                    <td className="py-2">
-                      <Link href={`/api/waiver/pdf/${s.id}`} className="font-semibold text-sky hover:underline">
-                        Download
-                      </Link>
-                    </td>
+          <form action={requestResign}>
+            <p className="mt-1 text-sm text-navy/60">
+              Tick signers (or use the header box to select all) and email them a request to re-sign
+              the current waiver — useful after publishing a new version. “Outdated” marks signers who
+              are not on the current version{current ? ` (v${current.version})` : ""}.
+            </p>
+            <div className="mt-3 flex items-center justify-between gap-3">
+              <button className="btn-brand rounded-md px-4 py-2 text-sm font-bold uppercase">
+                Email re-sign request to selected
+              </button>
+              <span className="text-xs text-navy/50">Showing the {signatures.length} most recent signatures.</span>
+            </div>
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full min-w-[880px] text-left text-sm">
+                <thead>
+                  <tr className="border-b border-navy/15 text-xs uppercase text-navy/50">
+                    <th className="py-2 pr-3"><BulkSelectAll name="sig" /></th>
+                    <th className="py-2 pr-4">Signed</th>
+                    <th className="py-2 pr-4">Participant</th>
+                    <th className="py-2 pr-4">Signer / account</th>
+                    <th className="py-2 pr-4">Ver</th>
+                    <th className="py-2 pr-4">IP</th>
+                    <th className="py-2 pr-4">Hash</th>
+                    <th className="py-2 pr-4">Emailed</th>
+                    <th className="py-2">PDF</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {signatures.map((s) => {
+                    const outdated = current ? s.version !== current.version : false;
+                    return (
+                      <tr key={s.id} className="border-b border-navy/5">
+                        <td className="py-2 pr-3">
+                          <input type="checkbox" name="sig" value={s.id} aria-label={`Select ${s.participantName}`} />
+                        </td>
+                        <td className="py-2 pr-4 whitespace-nowrap text-navy/60">{s.signedAt.toISOString().slice(0, 16).replace("T", " ")}</td>
+                        <td className="py-2 pr-4 font-medium text-navy">{s.participantName}</td>
+                        <td className="py-2 pr-4">
+                          {s.signedName}
+                          <span className="block text-xs text-navy/50">{s.user.email}</span>
+                        </td>
+                        <td className="py-2 pr-4">
+                          v{s.version}
+                          {outdated && (
+                            <span className="ml-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 ring-1 ring-amber-200">
+                              Outdated
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2 pr-4 text-navy/60">{s.ipAddress}</td>
+                        <td className="py-2 pr-4 font-mono text-xs text-navy/50">{s.pdfSha256 ? s.pdfSha256.slice(0, 10) : "—"}</td>
+                        <td className="py-2 pr-4 text-navy/60">{s.emailedAt ? s.emailedAt.toISOString().slice(0, 10) : "—"}</td>
+                        <td className="py-2">
+                          <Link href={`/api/waiver/pdf/${s.id}`} className="font-semibold text-sky hover:underline">
+                            Download
+                          </Link>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </form>
         )}
       </section>
     </div>

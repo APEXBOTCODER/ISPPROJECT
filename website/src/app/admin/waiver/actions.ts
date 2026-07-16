@@ -2,8 +2,11 @@
 
 import { redirect } from "next/navigation";
 import { z } from "zod";
-import { requireAdmin } from "@/lib/session";
+import { requireAdmin, requireStaff } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
+import { sendEmail } from "@/lib/email";
+import { config } from "@/lib/config";
+import { getCurrentWaiver } from "@/lib/waiver";
 
 const docSchema = z.object({
   title: z.string().min(3, "Title is too short").max(200),
@@ -54,4 +57,56 @@ export async function editWaiverDraft(formData: FormData) {
     data: { title: parsed.data.title, body: parsed.data.body },
   });
   redirect("/admin/waiver?ok=" + encodeURIComponent("Waiver text updated."));
+}
+
+/**
+ * Email the selected signers a request to re-sign the current waiver (e.g. after
+ * a new version is published). Dedupes by account so each person gets one email.
+ * Staff-level; sending is best-effort and never throws. Selection is by
+ * signature id (from the Signatures log checkboxes).
+ */
+export async function requestResign(formData: FormData) {
+  await requireStaff();
+  const ids = formData.getAll("sig").map(String).filter(Boolean);
+  if (ids.length === 0) fail("Select at least one signer to request a re-sign.");
+
+  const [sigs, current] = await Promise.all([
+    prisma.waiverSignature.findMany({
+      where: { id: { in: ids } },
+      include: { user: { select: { email: true, name: true } } },
+    }),
+    getCurrentWaiver(),
+  ]);
+
+  // One email per unique account, even if a person has several signatures.
+  const recipients = new Map<string, string>(); // email -> name
+  for (const s of sigs) {
+    if (s.user?.email) recipients.set(s.user.email, s.user.name);
+  }
+  if (recipients.size === 0) fail("The selected rows have no email on file.");
+
+  const link = `${config.siteUrl}/waiver?next=/dashboard`;
+  const versionNote = current ? ` (version ${current.version})` : "";
+  for (const [email, name] of recipients) {
+    await sendEmail({
+      to: email,
+      subject: `Action needed: please re-sign the updated waiver — ${config.siteName}`,
+      text: [
+        `Hi ${name},`,
+        ``,
+        `Our liability waiver${versionNote} has been updated. Please review and re-sign it`,
+        `before your next visit or booking. It only takes a minute:`,
+        ``,
+        `  ${link}`,
+        ``,
+        `Thank you,`,
+        `${config.siteName}`,
+      ].join("\n"),
+    });
+  }
+
+  redirect(
+    "/admin/waiver?ok=" +
+      encodeURIComponent(`Emailed a re-sign request to ${recipients.size} signer(s).`)
+  );
 }
