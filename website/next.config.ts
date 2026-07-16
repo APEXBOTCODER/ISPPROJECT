@@ -1,5 +1,13 @@
 import type { NextConfig } from "next";
 
+const isDev = process.env.NODE_ENV !== "production";
+
+// React's dev server uses eval() for fast-refresh/debugging; production never
+// does. So we only relax script-src with 'unsafe-eval' during development.
+const scriptSrc = isDev
+  ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+  : "script-src 'self' 'unsafe-inline'";
+
 // Security headers applied to every route. These never break the app and give
 // us HSTS, clickjacking protection, MIME-sniffing protection, a locked-down
 // referrer policy, and a Content-Security-Policy that blocks framing, plugins,
@@ -22,7 +30,7 @@ const securityHeaders = [
     value: [
       "default-src 'self'",
       // Next.js injects a small inline bootstrap/hydration script.
-      "script-src 'self' 'unsafe-inline'",
+      scriptSrc,
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob:",
       "font-src 'self' data:",
