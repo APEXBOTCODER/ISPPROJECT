@@ -31,19 +31,29 @@ export default async function AdminReportsPage({
   const from = /^\d{4}-\d{2}-\d{2}$/.test(sp.from ?? "") ? sp.from! : addDays(to, -29);
   const nextDay = addDays(to, 1);
 
-  const [resources, revenueAgg, bookingCount, noShowCount, refundAgg] = await Promise.all([
-    prisma.resource.findMany({ where: { active: true }, orderBy: { sortOrder: "asc" } }),
-    prisma.booking.aggregate({
-      where: { status: "CONFIRMED", date: { gte: from, lte: to } },
-      _sum: { totalCents: true },
-    }),
-    prisma.booking.count({ where: { status: "CONFIRMED", date: { gte: from, lte: to } } }),
-    prisma.booking.count({ where: { status: "CONFIRMED", noShow: true, date: { gte: from, lte: to } } }),
-    prisma.refundRecord.aggregate({
-      where: { createdAt: { gte: new Date(`${from}T00:00:00`), lt: new Date(`${nextDay}T00:00:00`) } },
-      _sum: { amountCents: true },
-    }),
-  ]);
+  const rangeStart = new Date(`${from}T00:00:00`);
+  const rangeEnd = new Date(`${nextDay}T00:00:00`);
+
+  const [resources, revenueAgg, bookingCount, cancelledCount, noShowCount, refundAgg, refundCount] =
+    await Promise.all([
+      prisma.resource.findMany({ where: { active: true }, orderBy: { sortOrder: "asc" } }),
+      prisma.booking.aggregate({
+        where: { status: "CONFIRMED", date: { gte: from, lte: to } },
+        _sum: { totalCents: true },
+      }),
+      prisma.booking.count({ where: { status: "CONFIRMED", date: { gte: from, lte: to } } }),
+      // Cancellations counted by WHEN they were cancelled (refund-record timestamp),
+      // so the number lines up with the refunds issued in the same range.
+      prisma.refundRecord.count({
+        where: { cancelled: true, createdAt: { gte: rangeStart, lt: rangeEnd } },
+      }),
+      prisma.booking.count({ where: { status: "CONFIRMED", noShow: true, date: { gte: from, lte: to } } }),
+      prisma.refundRecord.aggregate({
+        where: { createdAt: { gte: rangeStart, lt: rangeEnd } },
+        _sum: { amountCents: true },
+      }),
+      prisma.refundRecord.count({ where: { createdAt: { gte: rangeStart, lt: rangeEnd } } }),
+    ]);
 
   const revenue = revenueAgg._sum.totalCents ?? 0;
   const refunded = refundAgg._sum.amountCents ?? 0;
@@ -80,13 +90,17 @@ export default async function AdminReportsPage({
         <ReportRangePicker from={from} to={to} minDate={addDays(now.date, -365)} maxDate={addDays(now.date, 90)} />
       </div>
 
-      <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="mt-6 grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
         {stat("Confirmed revenue", formatCents(revenue))}
-        {stat("Refunded", formatCents(refunded))}
+        {stat(refundCount === 1 ? "Refunded (1 refund)" : `Refunded (${refundCount} refunds)`, formatCents(refunded))}
         {stat("Net", formatCents(revenue - refunded))}
         {stat("Bookings", String(bookingCount))}
+        {stat("Cancelled", String(cancelledCount))}
         {stat("No-shows", String(noShowCount))}
       </div>
+      <p className="mt-2 text-xs text-navy/50">
+        Revenue &amp; bookings are counted by session date; refunds &amp; cancellations by the date they were processed.
+      </p>
 
       <section className="mt-10">
         <h2 className="display text-2xl text-navy">Utilization by facility ({numDays} days)</h2>
