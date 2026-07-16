@@ -8,19 +8,38 @@ import { getCurrentWaiver, hasCurrentWaiver } from "@/lib/waiver";
 import { buildSignedWaiverPdf, sha256Hex } from "@/lib/waiverPdf";
 import { countInitialMarkers } from "@/lib/waiverMarkers";
 import WaiverBodyInitials from "@/components/WaiverBodyInitials";
-import SignatureNameField from "@/components/SignatureNameField";
+import WaiverRegistration from "@/components/WaiverRegistration";
 
 export const metadata = { title: "Liability Waiver" };
 export const dynamic = "force-dynamic";
 
-const signSchema = z.object({
-  signedName: z.string().min(2).max(100),
-  minorName: z.string().max(100).optional(),
-  minorDob: z.string().max(10).optional(),
-  guardianRelation: z.string().max(50).optional(),
-  agree: z.literal("on"),
-  consent: z.literal("on"),
-});
+const str = (v: FormDataEntryValue | null) => {
+  const s = String(v ?? "").trim();
+  return s.length ? s : undefined;
+};
+
+const signSchema = z
+  .object({
+    participantType: z.enum(["ADULT", "MINOR"]),
+    signedName: z.string().min(2).max(100),
+    participantDob: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date"),
+    phone: z.string().min(7).max(30),
+    address: z.string().max(200).optional(),
+    emergencyName: z.string().min(2).max(100),
+    emergencyPhone: z.string().min(7).max(30),
+    allergies: z.string().max(1000).optional(),
+    medical: z.string().max(1000).optional(),
+    minorName: z.string().max(100).optional(),
+    guardianRelation: z.string().max(60).optional(),
+    agree: z.literal("on"),
+    consent: z.literal("on"),
+  })
+  .refine((d) => d.participantType !== "MINOR" || (d.minorName && d.minorName.length >= 2), {
+    message: "minorName",
+  })
+  .refine((d) => d.participantType !== "MINOR" || (d.guardianRelation && d.guardianRelation.length >= 2), {
+    message: "guardianRelation",
+  });
 
 async function signWaiverAction(formData: FormData) {
   "use server";
@@ -29,16 +48,26 @@ async function signWaiverAction(formData: FormData) {
 
   const next = String(formData.get("next") || "/dashboard");
   const parsed = signSchema.safeParse({
-    signedName: formData.get("signedName"),
-    minorName: formData.get("minorName") || undefined,
-    minorDob: formData.get("minorDob") || undefined,
-    guardianRelation: formData.get("guardianRelation") || undefined,
+    participantType: formData.get("participantType"),
+    signedName: str(formData.get("signedName")),
+    participantDob: str(formData.get("participantDob")),
+    phone: str(formData.get("phone")),
+    address: str(formData.get("address")),
+    emergencyName: str(formData.get("emergencyName")),
+    emergencyPhone: str(formData.get("emergencyPhone")),
+    allergies: str(formData.get("allergies")),
+    medical: str(formData.get("medical")),
+    minorName: str(formData.get("minorName")),
+    guardianRelation: str(formData.get("guardianRelation")),
     agree: formData.get("agree"),
     consent: formData.get("consent"),
   });
   if (!parsed.success) {
     redirect(`/waiver?next=${encodeURIComponent(next)}&error=1`);
   }
+  const d = parsed.data;
+  const isMinor = d.participantType === "MINOR";
+  const mediaRelease = formData.get("declineMedia") !== "on";
 
   const document = await getCurrentWaiver();
   if (!document) redirect(next);
@@ -62,18 +91,26 @@ async function signWaiverAction(formData: FormData) {
     "unknown";
   const userAgent = headerList.get("user-agent") ?? null;
 
-  // Append-only legal record: signer + optional minor, IP, doc version, timestamp
+  // Append-only legal record: participant + guardian, contact/medical, IP,
+  // doc version, timestamp, initials, media-release choice.
   const signature = await prisma.waiverSignature.create({
     data: {
       userId: session.user.id,
       documentId: document.id,
       version: document.version,
-      signedName: parsed.data.signedName,
-      participantName: parsed.data.minorName || parsed.data.signedName,
-      minorDob: parsed.data.minorDob,
-      guardianRelation: parsed.data.minorName
-        ? parsed.data.guardianRelation || "Parent/Guardian"
-        : undefined,
+      signedName: d.signedName,
+      participantName: isMinor ? d.minorName! : d.signedName,
+      participantType: d.participantType,
+      participantDob: d.participantDob,
+      minorDob: isMinor ? d.participantDob : undefined,
+      guardianRelation: isMinor ? d.guardianRelation! : undefined,
+      phone: d.phone,
+      address: d.address,
+      emergencyName: d.emergencyName,
+      emergencyPhone: d.emergencyPhone,
+      allergies: d.allergies,
+      medical: d.medical,
+      mediaRelease,
       ipAddress,
       userAgent,
       initials: initials.length ? JSON.stringify(initials) : null,
@@ -124,7 +161,7 @@ export default async function WaiverPage({
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-12">
-      <h1 className="display text-4xl text-navy">Liability Waiver &amp; Release</h1>
+      <h1 className="display text-2xl leading-tight text-navy sm:text-3xl">{document.title}</h1>
 
       {!config.legalReviewed && (
         <p className="mt-4 rounded-md bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800 ring-1 ring-amber-200">
@@ -146,44 +183,25 @@ export default async function WaiverPage({
         </p>
       )}
 
-      {countInitialMarkers(document.body) > 0 && (
-        <p className="mt-6 text-sm font-medium text-navy/70">
-          Enter your initials in each highlighted box as you read, then sign at the bottom.
-        </p>
-      )}
+      <p className="mt-6 text-sm font-medium text-navy/70">
+        {countInitialMarkers(document.body) > 0
+          ? "Read the agreement, enter your initials in each highlighted box, complete your details, then sign at the bottom."
+          : "Read the agreement, complete your details, then sign at the bottom."}
+      </p>
 
-      <form action={signWaiverAction} className="mt-2 space-y-4">
+      <form action={signWaiverAction} className="mt-2 space-y-5">
         <input type="hidden" name="next" value={next} />
 
         <WaiverBodyInitials body={document.body} />
 
-        <SignatureNameField />
-
-        <details className="rounded-md border border-navy/15 p-3">
-          <summary className="cursor-pointer text-sm font-medium text-navy">
-            Signing for a minor? (parent/guardian waiver)
-          </summary>
-          <div className="mt-3 grid gap-3 sm:grid-cols-3">
-            <div className="sm:col-span-1">
-              <label htmlFor="minorName" className="block text-xs font-medium">Minor&apos;s name</label>
-              <input id="minorName" name="minorName" className="mt-1 w-full rounded-md border border-navy/20 px-2 py-1.5 text-sm" />
-            </div>
-            <div>
-              <label htmlFor="minorDob" className="block text-xs font-medium">Date of birth</label>
-              <input id="minorDob" name="minorDob" type="date" className="mt-1 w-full rounded-md border border-navy/20 px-2 py-1.5 text-sm" />
-            </div>
-            <div>
-              <label htmlFor="guardianRelation" className="block text-xs font-medium">Relationship</label>
-              <input id="guardianRelation" name="guardianRelation" placeholder="Parent" className="mt-1 w-full rounded-md border border-navy/20 px-2 py-1.5 text-sm" />
-            </div>
-          </div>
-        </details>
+        <WaiverRegistration />
 
         <label className="flex items-start gap-2 text-sm">
           <input type="checkbox" name="agree" required className="mt-0.5" />
           <span>
-            I have read and agree to the Waiver &amp; Release above (v{document.version}).
-            My typed name constitutes my electronic signature.
+            I have read, understand, and agree to the entire Agreement above (v{document.version}),
+            including the assumption of risk, release of liability, indemnification, and waiver of jury
+            trial. My typed name constitutes my electronic signature.
           </span>
         </label>
 

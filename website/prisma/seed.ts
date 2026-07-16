@@ -4,6 +4,7 @@ import "dotenv/config";
 import bcrypt from "bcryptjs";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
+import { DEFAULT_WAIVER_TITLE, DEFAULT_WAIVER_BODY } from "../src/lib/waiverContent";
 
 const prisma = new PrismaClient({
   adapter: new PrismaBetterSqlite3({
@@ -121,34 +122,6 @@ const tournaments = [
   },
 ];
 
-const waiverBody = `RELEASE AND WAIVER OF LIABILITY — INFINITY SPORTS PARK
-
-[DRAFT — PLACEHOLDER TEXT. This document has NOT been reviewed by an attorney
-and must be replaced with attorney-approved wording for Texas law before launch.]
-
-In consideration of being permitted to enter and use the facilities of Infinity
-Sports Park ("the Park"), I acknowledge and agree:
-
-1. ASSUMPTION OF RISK. Participation in cricket, soccer, training, and other
-   athletic activities involves inherent risks including serious bodily injury.
-   I knowingly and voluntarily assume all such risks.
-
-2. RELEASE. I release and hold harmless Infinity Sports Park, its owners,
-   staff, and affiliates (including Argyle Cricket Club) from all claims
-   arising from my use of the facilities, to the maximum extent permitted by
-   Texas law.
-
-3. MEDICAL. I am physically fit to participate and authorize emergency medical
-   treatment if needed.
-
-4. RULES. I agree to follow all posted facility rules and staff instructions.
-
-5. MINORS. If signing for a minor, I represent that I am the parent or legal
-   guardian and accept these terms on the minor's behalf.
-
-This waiver remains in effect until superseded by a newer version, which I will
-be asked to sign before my next booking.`;
-
 async function main() {
   for (const resource of resources) {
     await prisma.resource.upsert({
@@ -168,8 +141,8 @@ async function main() {
     update: {},
     create: {
       version: 1,
-      title: "Liability Waiver & Release (v1 — DRAFT)",
-      body: waiverBody,
+      title: DEFAULT_WAIVER_TITLE,
+      body: DEFAULT_WAIVER_BODY,
     },
   });
 

@@ -19,6 +19,16 @@ export interface WaiverSig {
   userAgent: string | null;
   consentEsign: boolean;
   signedAt: Date;
+  // Registration data (optional; older signatures may not have these).
+  participantType?: string | null;
+  participantDob?: string | null;
+  phone?: string | null;
+  address?: string | null;
+  emergencyName?: string | null;
+  emergencyPhone?: string | null;
+  allergies?: string | null;
+  medical?: string | null;
+  mediaRelease?: boolean | null;
 }
 
 /** WinAnsi-safe text (Helvetica can't encode arbitrary unicode / emoji). */
@@ -176,6 +186,28 @@ export async function buildSignedWaiverPdf(input: {
     write(`Signed by parent/guardian (${signature.guardianRelation ?? "Parent/Guardian"}): ${signature.signedName}`, { size: 10 });
   }
   write(`Account: ${userEmail}`, { size: 10 });
+
+  // Participant information (registration data collected with the waiver)
+  y -= 12;
+  rule();
+  write("PARTICIPANT INFORMATION", { size: 12, f: bold, gapAfter: 4 });
+  const ptype =
+    signature.participantType === "MINOR"
+      ? "Minor (under 18)"
+      : signature.participantType === "ADULT"
+      ? "Adult (18+)"
+      : "-";
+  write(`Participant type: ${ptype}`, { size: 10 });
+  if (signature.participantDob) write(`Date of birth: ${signature.participantDob}`, { size: 10 });
+  if (signature.phone) write(`Phone: ${signature.phone}`, { size: 10 });
+  if (signature.address) write(`Address: ${signature.address}`, { size: 10 });
+  if (signature.emergencyName || signature.emergencyPhone) {
+    const ec = [signature.emergencyName, signature.emergencyPhone].filter(Boolean).join(" - ");
+    write(`Emergency contact: ${ec}`, { size: 10 });
+  }
+  write(`Allergies: ${signature.allergies?.trim() || "None reported"}`, { size: 10 });
+  write(`Medical conditions / medications: ${signature.medical?.trim() || "None reported"}`, { size: 10 });
+  write(`Media release (Section 7): ${signature.mediaRelease === false ? "DECLINED - opted out" : "Granted"}`, { size: 10 });
 
   // Audit certificate
   y -= 12;

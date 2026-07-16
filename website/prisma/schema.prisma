@@ -209,6 +209,16 @@ model WaiverSignature {
   ipAddress        String
   userAgent        String?
   initials         String? // JSON array of initials entered at each [[initial]] marker, in order
+  // Registration data collected with the waiver (Smartwaiver-equivalent):
+  participantType  String? // "ADULT" | "MINOR"
+  participantDob   String? // participant's date of birth (the minor's, for guardian waivers)
+  phone            String?
+  address          String?
+  emergencyName    String?
+  emergencyPhone   String?
+  allergies        String?
+  medical          String?
+  mediaRelease     Boolean  @default(true) // false = participant opted OUT of the photo/media release
   consentEsign     Boolean  @default(false) // ESIGN/UETA electronic-signature consent
   pdfSha256        String? // SHA-256 of the sealed PDF (tamper-evidence)
   emailedAt        DateTime?
