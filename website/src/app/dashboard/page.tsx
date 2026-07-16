@@ -48,7 +48,12 @@ export default async function DashboardPage({
       (b.date > now.date || (b.date === now.date && b.endHour > now.hour))
   );
   const past = bookings.filter((b) => !upcoming.includes(b));
-  const waiverCurrent = signatures.some((s) => s.version === currentWaiver?.version);
+  // A signature counts only if it's for the current version AND was made after
+  // any staff-issued "re-sign required" flag on the account.
+  const resignAt = dbUser?.waiverResignRequiredAt ?? null;
+  const waiverCurrent = signatures.some(
+    (s) => s.version === currentWaiver?.version && (!resignAt || s.signedAt >= resignAt)
+  );
 
   // Group upcoming bookings that belong to a multi-day reservation; standalone
   // bookings (reservationId null) render individually.
@@ -102,6 +107,18 @@ export default async function DashboardPage({
         </p>
       )}
 
+      {!waiverCurrent && (
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-900 ring-1 ring-amber-300">
+          <span>
+            <strong>Waiver signature required.</strong> You must sign the current liability waiver
+            {currentWaiver ? ` (v${currentWaiver.version})` : ""} before making another reservation.
+          </span>
+          <Link href="/waiver?next=/dashboard" className="btn-brand rounded-md px-4 py-2 text-xs font-bold uppercase">
+            Sign waiver now
+          </Link>
+        </div>
+      )}
+
       {/* Verification status */}
       <section className="mt-8 rounded-2xl border border-navy/10 p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -134,14 +151,25 @@ export default async function DashboardPage({
       </section>
 
       {/* Waiver status */}
-      <section className="mt-8 rounded-2xl border border-navy/10 p-5">
+      <section
+        className={`mt-8 rounded-2xl border p-5 ${
+          waiverCurrent ? "border-navy/10" : "border-amber-300 bg-amber-50/60"
+        }`}
+      >
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="display text-xl text-navy">Liability waiver</h2>
+            <h2 className="display text-xl text-navy">
+              Liability waiver
+              {!waiverCurrent && (
+                <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 align-middle text-xs font-semibold text-amber-800 ring-1 ring-amber-300">
+                  Signature required
+                </span>
+              )}
+            </h2>
             <p className="mt-1 text-sm text-navy/60">
               {waiverCurrent
                 ? `Signed — current version (v${currentWaiver?.version}).`
-                : "Not signed for the current version. Required before booking."}
+                : "You must sign the current liability waiver before making another reservation."}
             </p>
           </div>
           {!waiverCurrent && (

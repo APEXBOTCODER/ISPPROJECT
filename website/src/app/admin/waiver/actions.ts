@@ -73,17 +73,28 @@ export async function requestResign(formData: FormData) {
   const [sigs, current] = await Promise.all([
     prisma.waiverSignature.findMany({
       where: { id: { in: ids } },
-      include: { user: { select: { email: true, name: true } } },
+      include: { user: { select: { id: true, email: true, name: true } } },
     }),
     getCurrentWaiver(),
   ]);
 
   // One email per unique account, even if a person has several signatures.
   const recipients = new Map<string, string>(); // email -> name
+  const userIds = new Set<string>();
   for (const s of sigs) {
-    if (s.user?.email) recipients.set(s.user.email, s.user.name);
+    if (s.user?.email) {
+      recipients.set(s.user.email, s.user.name);
+      userIds.add(s.user.id);
+    }
   }
   if (recipients.size === 0) fail("The selected rows have no email on file.");
+
+  // Force the re-sign: invalidate their existing signatures so booking is
+  // blocked and their account shows "waiver required" until they sign again.
+  await prisma.user.updateMany({
+    where: { id: { in: [...userIds] } },
+    data: { waiverResignRequiredAt: new Date() },
+  });
 
   const link = `${config.siteUrl}/waiver?next=/dashboard`;
   const versionNote = current ? ` (version ${current.version})` : "";
@@ -107,6 +118,8 @@ export async function requestResign(formData: FormData) {
 
   redirect(
     "/admin/waiver?ok=" +
-      encodeURIComponent(`Emailed a re-sign request to ${recipients.size} signer(s).`)
+      encodeURIComponent(
+        `Emailed ${recipients.size} signer(s) and flagged them to re-sign before their next booking.`
+      )
   );
 }

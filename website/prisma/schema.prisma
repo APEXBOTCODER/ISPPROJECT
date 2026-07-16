@@ -17,6 +17,9 @@ model User {
   phone         String?
   role          String    @default("CUSTOMER") // CUSTOMER | STAFF | ADMIN
   active        Boolean   @default(true) // deactivated users can't log in or book
+  // When set, the user must re-sign the waiver: any signature dated before this
+  // no longer counts, so they are forced to sign again before their next booking.
+  waiverResignRequiredAt DateTime?
   emailVerified DateTime?
   phoneVerified DateTime?
   image         String?
