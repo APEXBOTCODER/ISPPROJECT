@@ -183,11 +183,31 @@ export default async function WaiverPage({
         </p>
       )}
 
-      <p className="mt-6 text-sm font-medium text-navy/70">
-        {countInitialMarkers(document.body) > 0
-          ? "Read the agreement, enter your initials in each highlighted box, complete your details, then sign at the bottom."
-          : "Read the agreement, complete your details, then sign at the bottom."}
-      </p>
+      {(() => {
+        const marks = countInitialMarkers(document.body);
+        return (
+          <div className="mt-6 rounded-lg border border-sky/30 bg-sky/[0.04] px-4 py-3 text-sm text-navy/80">
+            <p className="font-semibold text-navy">How to complete this waiver</p>
+            <ol className="mt-1 list-decimal space-y-0.5 pl-5">
+              <li>Read the agreement below.</li>
+              {marks > 0 && (
+                <li>
+                  Enter your initials at the <strong>{marks}</strong> highlighted{" "}
+                  <span className="rounded bg-amber-100 px-1 font-semibold text-amber-700 ring-1 ring-amber-300">
+                    ✍ Initials required
+                  </span>{" "}
+                  boxes.
+                </li>
+              )}
+              <li>
+                Complete your details — fields marked{" "}
+                <span className="font-semibold text-red-500">*</span> are required.
+              </li>
+              <li>Sign and accept at the bottom.</li>
+            </ol>
+          </div>
+        );
+      })()}
 
       <form action={signWaiverAction} className="mt-2 space-y-5">
         <input type="hidden" name="next" value={next} />
@@ -196,20 +216,21 @@ export default async function WaiverPage({
 
         <WaiverRegistration />
 
-        <label className="flex items-start gap-2 text-sm">
+        <label className="flex items-start gap-2 rounded-lg border border-navy/10 bg-navy/[0.02] p-3 text-sm">
           <input type="checkbox" name="agree" required className="mt-0.5" />
           <span>
-            I have read, understand, and agree to the entire Agreement above (v{document.version}),
-            including the assumption of risk, release of liability, indemnification, and waiver of jury
-            trial. My typed name constitutes my electronic signature.
+            <span className="font-semibold text-red-500">*</span> I have read, understand, and agree to
+            the entire Agreement above (v{document.version}), including the assumption of risk, release of
+            liability, indemnification, and waiver of jury trial. My typed name constitutes my electronic
+            signature.
           </span>
         </label>
 
-        <label className="flex items-start gap-2 text-sm">
+        <label className="flex items-start gap-2 rounded-lg border border-navy/10 bg-navy/[0.02] p-3 text-sm">
           <input type="checkbox" name="consent" required className="mt-0.5" />
           <span>
-            I consent to sign this waiver electronically and to receive a copy in
-            electronic form (ESIGN/UETA).
+            <span className="font-semibold text-red-500">*</span> I consent to sign this waiver
+            electronically and to receive a copy in electronic form (ESIGN/UETA).
           </span>
         </label>
 

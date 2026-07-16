@@ -8,6 +8,13 @@ const field =
   "mt-1 w-full rounded-md border border-navy/20 px-3 py-2 text-sm focus:border-sky focus:outline-none focus:ring-2 focus:ring-sky/30";
 const labelCls = "block text-xs font-semibold uppercase tracking-wide text-navy/60";
 
+/** Red asterisk marking a required field. */
+const Req = () => (
+  <span className="text-red-500" title="Required">
+    {" *"}
+  </span>
+);
+
 /**
  * Smartwaiver-equivalent registration block: participant type (Adult / Minor),
  * participant + guardian details, emergency contact, allergies/medical info,
@@ -22,6 +29,10 @@ export default function WaiverRegistration() {
   return (
     <div className="space-y-5">
       <input type="hidden" name="participantType" value={type} />
+
+      <p className="text-xs text-navy/50">
+        Fields marked <span className="font-semibold text-red-500">*</span> are required.
+      </p>
 
       {/* Who is participating */}
       <div>
@@ -53,7 +64,7 @@ export default function WaiverRegistration() {
           {isMinor ? (
             <div>
               <label className={labelCls}>
-                Minor&apos;s full legal name
+                Minor&apos;s full legal name<Req />
                 <input name="minorName" required className={field} placeholder="Alex Q. Public" />
               </label>
             </div>
@@ -64,7 +75,7 @@ export default function WaiverRegistration() {
           )}
           <div>
             <label className={labelCls}>
-              {isMinor ? "Minor's date of birth" : "Date of birth"}
+              {isMinor ? "Minor's date of birth" : "Date of birth"}<Req />
               <input name="participantDob" type="date" required className={field} />
             </label>
           </div>
@@ -77,7 +88,7 @@ export default function WaiverRegistration() {
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
           <div>
             <label className={labelCls}>
-              Phone
+              Phone<Req />
               <input name="phone" type="tel" required className={field} placeholder="(940) 555-0100" />
             </label>
           </div>
@@ -89,13 +100,13 @@ export default function WaiverRegistration() {
           </div>
           <div>
             <label className={labelCls}>
-              Emergency contact name
+              Emergency contact name<Req />
               <input name="emergencyName" required className={field} placeholder="Full name" />
             </label>
           </div>
           <div>
             <label className={labelCls}>
-              Emergency contact phone
+              Emergency contact phone<Req />
               <input name="emergencyPhone" type="tel" required className={field} placeholder="(940) 555-0199" />
             </label>
           </div>
@@ -129,7 +140,7 @@ export default function WaiverRegistration() {
         {isMinor && (
           <div className="mt-3">
             <label className={labelCls}>
-              Your relationship to the minor
+              Your relationship to the minor<Req />
               <input name="guardianRelation" required className={field} placeholder="Parent / Legal guardian" />
             </label>
           </div>
@@ -139,6 +150,7 @@ export default function WaiverRegistration() {
             {isMinor
               ? "Your full legal name (parent/guardian electronic signature)"
               : "Your full legal name (electronic signature)"}
+            <Req />
             <input
               name="signedName"
               required
