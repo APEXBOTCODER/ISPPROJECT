@@ -2,6 +2,7 @@ import { createHash } from "crypto";
 import { PDFDocument, StandardFonts, rgb, degrees, type PDFFont, type PDFPage } from "pdf-lib";
 import { prisma } from "@/lib/prisma";
 import { config } from "@/lib/config";
+import { fillInitialMarkers, parseStoredInitials } from "@/lib/waiverMarkers";
 
 export interface WaiverDoc {
   version: number;
@@ -53,11 +54,15 @@ export async function buildSignedWaiverPdf(input: {
   document: WaiverDoc;
   signature: WaiverSig;
   userEmail: string;
+  initials?: string[];
 }): Promise<Uint8Array> {
   const { document, signature, userEmail } = input;
+  const initials = input.initials ?? [];
   const pdf = await PDFDocument.create();
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+  // Italic serif stands in for a handwritten signature (no external font needed).
+  const script = await pdf.embedFont(StandardFonts.TimesRomanItalic);
   const draft = !config.legalReviewed;
 
   const navy = rgb(0.06, 0.11, 0.2);
@@ -134,9 +139,11 @@ export async function buildSignedWaiverPdf(input: {
   write(`Liability Waiver & Release  ·  Version ${document.version}`, { size: 11, color: gray, gapAfter: 6 });
   rule();
 
-  // Document body (exact signed text), paragraph-aware
+  // Document body (exact signed text) with the signer's initials rendered
+  // inline at each [[initial]] marker, paragraph-aware.
   write(document.title, { size: 12, f: bold, gapAfter: 4 });
-  for (const raw of document.body.split("\n")) {
+  const filledBody = fillInitialMarkers(document.body, initials);
+  for (const raw of filledBody.split("\n")) {
     if (raw.trim() === "") {
       ensure(6);
       y -= 6;
@@ -145,11 +152,24 @@ export async function buildSignedWaiverPdf(input: {
     }
   }
 
-  // Signature block
+  // Signature block — typed name rendered as a handwriting-style signature.
   y -= 10;
   rule();
-  write("SIGNATURE", { size: 12, f: bold, gapAfter: 4 });
-  write(`Electronic signature: ${signature.signedName}`, { size: 10 });
+  write("SIGNATURE", { size: 12, f: bold, gapAfter: 6 });
+  ensure(40);
+  page.drawText(safe(signature.signedName) || "(unsigned)", {
+    x: MARGIN + 6, y: y - 20, size: 24, font: script, color: navy,
+  });
+  page.drawLine({
+    start: { x: MARGIN, y: y - 26 }, end: { x: MARGIN + 300, y: y - 26 },
+    thickness: 0.6, color: rgb(0.6, 0.63, 0.68),
+  });
+  y -= 40;
+  write("Typed electronic signature", { size: 8, color: gray, gapAfter: 6 });
+  write(`Signed name: ${signature.signedName}`, { size: 10 });
+  if (initials.length) {
+    write(`Initials provided (${initials.length}): ${initials.join(", ")}`, { size: 10 });
+  }
   write(`Participant: ${signature.participantName}`, { size: 10 });
   if (signature.guardianRelation || (signature.participantName !== signature.signedName)) {
     if (signature.minorDob) write(`Minor's date of birth: ${signature.minorDob}`, { size: 10 });
@@ -201,6 +221,7 @@ export async function getSealedPdfBytes(signature: NonNullable<SignatureWithRefs
     document: signature.document,
     signature,
     userEmail: signature.user.email,
+    initials: parseStoredInitials((signature as { initials?: string | null }).initials),
   });
 }
 

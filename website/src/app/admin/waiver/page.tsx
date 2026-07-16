@@ -76,6 +76,9 @@ export default async function AdminWaiverPage({
                 <input type="hidden" name="id" value={current.id} />
                 <input name="title" defaultValue={current.title} className={inputCls} />
                 <textarea name="body" rows={8} defaultValue={current.body} className={inputCls} />
+                <p className="text-xs text-navy/50">
+                  Use <code className="rounded bg-navy/5 px-1">[[initial]]</code> to add an initials box.
+                </p>
                 <button className="btn-brand rounded-md px-4 py-2 text-sm font-bold uppercase">Save text</button>
               </form>
             )}
@@ -106,6 +109,10 @@ export default async function AdminWaiverPage({
               Waiver text
               <textarea name="body" required rows={12} defaultValue={current?.body} className={inputCls} />
             </label>
+            <p className="text-xs text-navy/50">
+              Tip: type <code className="rounded bg-navy/5 px-1">[[initial]]</code> anywhere the signer must
+              initial. Each becomes a required initials box on the signing page and prints inline on the PDF.
+            </p>
             <button className="btn-brand rounded-md px-5 py-2 text-sm font-bold uppercase">Publish new version</button>
           </form>
         </section>

@@ -6,6 +6,9 @@ import { prisma } from "@/lib/prisma";
 import { config } from "@/lib/config";
 import { getCurrentWaiver, hasCurrentWaiver } from "@/lib/waiver";
 import { buildSignedWaiverPdf, sha256Hex } from "@/lib/waiverPdf";
+import { countInitialMarkers } from "@/lib/waiverMarkers";
+import WaiverBodyInitials from "@/components/WaiverBodyInitials";
+import SignatureNameField from "@/components/SignatureNameField";
 
 export const metadata = { title: "Liability Waiver" };
 export const dynamic = "force-dynamic";
@@ -40,6 +43,18 @@ async function signWaiverAction(formData: FormData) {
   const document = await getCurrentWaiver();
   if (!document) redirect(next);
 
+  // Collect the initials entered at each [[initial]] marker, in order. Every
+  // marker must be initialled (2–6 chars) or the signature is rejected.
+  const markerCount = countInitialMarkers(document.body);
+  const initials: string[] = [];
+  for (let i = 0; i < markerCount; i++) {
+    const val = String(formData.get(`initial_${i}`) ?? "").trim();
+    if (val.length < 2 || val.length > 6) {
+      redirect(`/waiver?next=${encodeURIComponent(next)}&error=1`);
+    }
+    initials.push(val);
+  }
+
   const headerList = await headers();
   const ipAddress =
     headerList.get("x-forwarded-for")?.split(",")[0]?.trim() ??
@@ -61,6 +76,7 @@ async function signWaiverAction(formData: FormData) {
         : undefined,
       ipAddress,
       userAgent,
+      initials: initials.length ? JSON.stringify(initials) : null,
       consentEsign: true,
     },
   });
@@ -70,6 +86,7 @@ async function signWaiverAction(formData: FormData) {
     document,
     signature,
     userEmail: session.user.email ?? "",
+    initials,
   });
   await prisma.$transaction([
     prisma.waiverPdf.create({ data: { signatureId: signature.id, data: Buffer.from(bytes) } }),
@@ -129,24 +146,18 @@ export default async function WaiverPage({
         </p>
       )}
 
-      <div className="mt-6 max-h-80 overflow-y-auto whitespace-pre-wrap rounded-xl border border-navy/15 bg-navy/[0.03] p-5 text-sm leading-6 text-navy/90">
-        {document.body}
-      </div>
+      {countInitialMarkers(document.body) > 0 && (
+        <p className="mt-6 text-sm font-medium text-navy/70">
+          Enter your initials in each highlighted box as you read, then sign at the bottom.
+        </p>
+      )}
 
-      <form action={signWaiverAction} className="mt-6 space-y-4">
+      <form action={signWaiverAction} className="mt-2 space-y-4">
         <input type="hidden" name="next" value={next} />
-        <div>
-          <label htmlFor="signedName" className="block text-sm font-medium">
-            Type your full legal name (electronic signature)
-          </label>
-          <input
-            id="signedName"
-            name="signedName"
-            required
-            className="mt-1 w-full rounded-md border border-navy/20 px-3 py-2 italic focus:border-sky focus:outline-none focus:ring-2 focus:ring-sky/30"
-            placeholder="Jane Q. Public"
-          />
-        </div>
+
+        <WaiverBodyInitials body={document.body} />
+
+        <SignatureNameField />
 
         <details className="rounded-md border border-navy/15 p-3">
           <summary className="cursor-pointer text-sm font-medium text-navy">

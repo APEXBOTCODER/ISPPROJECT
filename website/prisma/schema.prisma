@@ -208,6 +208,7 @@ model WaiverSignature {
   guardianRelation String?
   ipAddress        String
   userAgent        String?
+  initials         String? // JSON array of initials entered at each [[initial]] marker, in order
   consentEsign     Boolean  @default(false) // ESIGN/UETA electronic-signature consent
   pdfSha256        String? // SHA-256 of the sealed PDF (tamper-evidence)
   emailedAt        DateTime?
