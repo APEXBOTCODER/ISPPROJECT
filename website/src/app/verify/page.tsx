@@ -22,8 +22,9 @@ export default async function VerifyPage({
   const user = await prisma.user.findUnique({ where: { id: session.user.id } });
   if (!user) redirect("/login");
 
-  const devHint =
-    config.emailProvider === "console" || config.smsProvider === "console";
+  // Only the email channel gates this banner — SMS is optional, so running it in
+  // "console" mode in production is a valid choice and shouldn't imply dev mode.
+  const devHint = config.emailProvider === "console";
 
   return (
     <div className="mx-auto max-w-md px-4 py-12">
@@ -40,8 +41,9 @@ export default async function VerifyPage({
       )}
       {devHint && (
         <p className="mt-4 rounded-md bg-sky/5 px-4 py-3 text-xs text-navy/60 ring-1 ring-sky/15">
-          Dev mode: codes are printed to the server console (email/SMS providers
-          are in &ldquo;console&rdquo; mode until Resend/Twilio are connected).
+          Codes are being printed to the server log, not emailed. Set
+          <code> EMAIL_PROVIDER=ses</code> (with SES out of the sandbox) and restart
+          to deliver real emails.
         </p>
       )}
 
