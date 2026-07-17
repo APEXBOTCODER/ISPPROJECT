@@ -6,6 +6,9 @@ import { prisma } from "@/lib/prisma";
  * edit the values at /admin/content.
  */
 export const SETTING_DEFAULTS = {
+  "contact.email": "hello@infinitysportspark.com",
+  "contact.phone": "940-233-8993",
+  "contact.address": "Denton County, Texas",
   "soccer.comingSoon": "true",
   "soccer.bannerText":
     "Soccer is coming soon — fields are being finished ahead of our Summer 2026 launch.",
@@ -25,8 +28,26 @@ export const SETTING_FIELDS: {
   key: SettingKey;
   label: string;
   help: string;
-  type: "text" | "textarea" | "boolean" | "email";
+  type: "text" | "textarea" | "boolean" | "email" | "tel";
 }[] = [
+  {
+    key: "contact.email",
+    label: "Contact: email address",
+    help: "Public contact email shown on the Contact page and in the footer.",
+    type: "email",
+  },
+  {
+    key: "contact.phone",
+    label: "Contact: phone number",
+    help: "Public phone number shown on the Contact page and in the footer.",
+    type: "tel",
+  },
+  {
+    key: "contact.address",
+    label: "Contact: address",
+    help: "Public address / location shown on the Contact page and in the footer.",
+    type: "textarea",
+  },
   {
     key: "soccer.comingSoon",
     label: "Soccer: show “coming soon” banner",

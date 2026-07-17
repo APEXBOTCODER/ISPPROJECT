@@ -21,7 +21,8 @@ export default async function AdminContentPage({
     <div className="max-w-3xl">
       <h1 className="display text-4xl text-navy">Site content</h1>
       <p className="mt-2 text-sm text-navy/60">
-        Editable copy for the Soccer and Pricing pages. Changes apply immediately.
+        Editable contact details (email, phone, address) and copy for the Soccer and Pricing pages.
+        Changes apply immediately.
       </p>
 
       {ok && (
@@ -60,7 +61,7 @@ export default async function AdminContentPage({
                   />
                 ) : (
                   <input
-                    type={field.type === "email" ? "email" : "text"}
+                    type={field.type === "email" ? "email" : field.type === "tel" ? "tel" : "text"}
                     name={field.key}
                     defaultValue={settings[field.key]}
                     className={inputCls}

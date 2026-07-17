@@ -1,6 +1,19 @@
-export const metadata = { title: "Contact" };
+import { getSettings } from "@/lib/settings";
 
-export default function ContactPage() {
+export const metadata = { title: "Contact" };
+export const dynamic = "force-dynamic";
+
+/** Turn a phone string into a tel: href (digits and a leading + only). */
+function telHref(phone: string): string {
+  return "tel:" + phone.replace(/[^\d+]/g, "");
+}
+
+export default async function ContactPage() {
+  const settings = await getSettings();
+  const email = settings["contact.email"];
+  const phone = settings["contact.phone"];
+  const address = settings["contact.address"];
+
   return (
     <div className="mx-auto max-w-3xl px-4 py-12">
       <h1 className="display text-5xl text-navy">
@@ -14,20 +27,31 @@ export default function ContactPage() {
       <div className="mt-8 grid gap-5 sm:grid-cols-2">
         <div className="rounded-2xl border border-navy/10 p-6">
           <h2 className="display text-xl text-navy">Email</h2>
-          {/* Swap for the real inbox once the domain email is live — README §Domain & launch */}
-          <a href="mailto:hello@infinitysportspark.com" className="mt-2 block font-semibold text-sky hover:underline">
-            hello@infinitysportspark.com
-          </a>
+          {email ? (
+            <a href={`mailto:${email}`} className="mt-2 block font-semibold text-sky hover:underline">
+              {email}
+            </a>
+          ) : (
+            <p className="mt-2 text-sm text-navy/70">Email coming soon.</p>
+          )}
         </div>
         <div className="rounded-2xl border border-navy/10 p-6">
           <h2 className="display text-xl text-navy">Phone</h2>
-          <p className="mt-2 text-sm text-navy/70">
-            Phone line opens with the park — Summer 2026.
-          </p>
+          {phone ? (
+            <a href={telHref(phone)} className="mt-2 block font-semibold text-sky hover:underline">
+              {phone}
+            </a>
+          ) : (
+            <p className="mt-2 text-sm text-navy/70">Phone line opens with the park.</p>
+          )}
         </div>
         <div className="rounded-2xl border border-navy/10 p-6 sm:col-span-2">
           <h2 className="display text-xl text-navy">Visit</h2>
-          <p className="mt-2 text-sm text-navy/70">Exact address announced closer to launch.</p>
+          {address ? (
+            <p className="mt-2 whitespace-pre-line text-sm text-navy/70">{address}</p>
+          ) : (
+            <p className="mt-2 text-sm text-navy/70">Exact address announced closer to launch.</p>
+          )}
         </div>
       </div>
 

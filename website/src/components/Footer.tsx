@@ -1,8 +1,18 @@
 import Link from "next/link";
 import { config } from "@/lib/config";
+import { getSettings } from "@/lib/settings";
 import InfinityMark from "@/components/InfinityMark";
 
-export default function Footer() {
+function telHref(phone: string): string {
+  return "tel:" + phone.replace(/[^\d+]/g, "");
+}
+
+export default async function Footer() {
+  const settings = await getSettings();
+  const email = settings["contact.email"];
+  const phone = settings["contact.phone"];
+  const address = settings["contact.address"];
+
   return (
     <footer className="bg-navy-ink text-white">
       <div className="h-1 gradient-brand" />
@@ -16,6 +26,19 @@ export default function Footer() {
           <p className="mt-2 text-xs text-white/50">
             Affiliated with Argyle Cricket Club — &ldquo;Cricket is our first love.&rdquo;
           </p>
+          <div className="mt-4 space-y-1 text-sm text-white/80">
+            {phone && (
+              <p>
+                <a href={telHref(phone)} className="hover:text-pitch">{phone}</a>
+              </p>
+            )}
+            {email && (
+              <p>
+                <a href={`mailto:${email}`} className="hover:text-pitch">{email}</a>
+              </p>
+            )}
+            {address && <p className="text-xs text-white/50">{address}</p>}
+          </div>
         </div>
 
         <div>
