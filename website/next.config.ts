@@ -44,9 +44,16 @@ const securityHeaders = [
   },
 ];
 
+// On a small (1 GB) server the in-build TypeScript/ESLint pass can run out of
+// memory. Setting SKIP_TYPECHECK=true skips it there; dev + CI still type-check
+// fully (the compile itself is unaffected). See DEPLOYMENT.md.
+const skipTypecheck = process.env.SKIP_TYPECHECK === "true";
+
 const nextConfig: NextConfig = {
   // Never expose the framework version to attackers.
   poweredByHeader: false,
+  typescript: { ignoreBuildErrors: skipTypecheck },
+  eslint: { ignoreDuringBuilds: skipTypecheck },
   experimental: {
     // Admin image uploads go through a Server Action; the default cap is 1MB.
     serverActions: {
