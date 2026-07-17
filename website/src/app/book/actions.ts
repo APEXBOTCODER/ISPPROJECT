@@ -12,6 +12,7 @@ import { sendEmail } from "@/lib/email";
 import { hasCurrentWaiver } from "@/lib/waiver";
 import { hasVerifiedEmail } from "@/lib/verification";
 import { getBookingPolicy } from "@/lib/policy";
+import { minHoursForDate, MIN_DURATION_MESSAGE } from "@/lib/bookingRules";
 
 // Hard safety bounds; the *policy* caps (maxHoursPerSegment / maxSegmentsPerReservation)
 // are enforced inside createReservation against the live booking policy.
@@ -120,6 +121,9 @@ export async function createReservation(formData: FormData) {
       sortedHours[sortedHours.length - 1] >= resource.closeHour
     ) {
       bail(`A selected time on ${seg.date} is outside the bookable window.`);
+    }
+    if (sortedHours.length < minHoursForDate(seg.date)) {
+      bail(MIN_DURATION_MESSAGE);
     }
     // Reject duplicate slots within the same reservation.
     for (const h of sortedHours) {

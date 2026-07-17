@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import MultiDayCalendar from "@/components/MultiDayCalendar";
 import { fetchDayAvailability, hourBounds } from "@/lib/dayAvailability";
+import { minHoursForDates, parkNowParts, MIN_DURATION_MESSAGE } from "@/lib/bookingRules";
 
 interface ResourceOption {
   id: string;
@@ -64,7 +65,10 @@ export default function BookingWizard({
     [resources, selectedIds]
   );
 
-  const today = new Date().toISOString().slice(0, 10);
+  // "Now" in the park's timezone, so today's already-passed hours are hidden
+  // regardless of the visitor's own timezone.
+  const parkNow = useMemo(() => parkNowParts(), []);
+  const today = parkNow.date;
   const maxD = new Date();
   maxD.setDate(maxD.getDate() + maxAdvanceDays);
   const maxDate = maxD.toISOString().slice(0, 10);
@@ -79,13 +83,30 @@ export default function BookingWizard({
   const [submitting, setSubmitting] = useState(false);
 
   const bounds = useMemo(() => hourBounds(selectedResources), [selectedResources]);
+  const isTodaySelected = days.includes(parkNow.date);
+  // Earliest selectable "from" hour: the park open hour, but never in the past
+  // when today is one of the selected days.
+  const earliestFrom = bounds
+    ? isTodaySelected
+      ? Math.max(bounds.open, parkNow.hour + 1)
+      : bounds.open
+    : 0;
+  const noHoursLeftToday = Boolean(bounds) && bounds !== null && earliestFrom >= bounds.close;
 
-  // Clamp the hour range into the selected facilities' overlapping window.
+  // Clamp the hour range into the selected facilities' overlapping window and
+  // out of the past.
   useEffect(() => {
     if (!bounds) return;
-    setFromHour((f) => Math.min(Math.max(f, bounds.open), bounds.close - 1));
-    setToHour((t) => Math.min(Math.max(t, bounds.open + 1), bounds.close));
-  }, [bounds]);
+    const lo = isTodaySelected ? Math.max(bounds.open, parkNow.hour + 1) : bounds.open;
+    setFromHour((f) => Math.min(Math.max(f, lo), bounds.close - 1));
+    setToHour((t) => Math.min(Math.max(t, lo + 1), bounds.close));
+  }, [bounds, isTodaySelected, parkNow.hour]);
+
+  // Keep "to" strictly after "from".
+  useEffect(() => {
+    if (!bounds) return;
+    setToHour((t) => (t <= fromHour ? Math.min(fromHour + 1, bounds.close) : t));
+  }, [fromHour, bounds]);
 
   function toggleFacility(id: string) {
     setSelectedIds((prev) => {
@@ -103,6 +124,8 @@ export default function BookingWizard({
     if (!bounds) { setNotice("The selected grounds have no common open hours."); return; }
     if (toHour <= fromHour) { setNotice("Choose a valid hour range."); return; }
     if (toHour - fromHour > maxHoursPerSegment) { setNotice(`Max ${maxHoursPerSegment} hours per day.`); return; }
+    if (toHour - fromHour < minHoursForDates(days)) { setNotice(MIN_DURATION_MESSAGE); return; }
+    if (isTodaySelected && fromHour <= parkNow.hour) { setNotice("That start time has already passed today — pick a later time."); return; }
 
     const hours = Array.from({ length: toHour - fromHour }, (_, i) => fromHour + i);
     const combos = selectedResources.flatMap((r) => days.map((date) => ({ r, date })));
@@ -210,18 +233,25 @@ export default function BookingWizard({
                 <p className="max-w-xs rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900 ring-1 ring-amber-200">
                   The selected grounds have no common open hours — pick grounds with overlapping hours.
                 </p>
+              ) : noHoursLeftToday ? (
+                <p className="max-w-xs rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900 ring-1 ring-amber-200">
+                  No more hours are available today for these grounds — deselect today and pick a future day.
+                </p>
               ) : (
-                <div className="flex items-end gap-2">
-                  <label className="text-xs font-semibold text-navy/60">From
-                    <select value={fromHour} onChange={(e) => setFromHour(Number(e.target.value))} className="mt-1 block rounded-md border border-navy/20 px-2 py-1.5 text-sm">
-                      {hourOptions(bounds.open, bounds.close - 1).map((h) => <option key={h} value={h}>{h}:00</option>)}
-                    </select>
-                  </label>
-                  <label className="text-xs font-semibold text-navy/60">To
-                    <select value={toHour} onChange={(e) => setToHour(Number(e.target.value))} className="mt-1 block rounded-md border border-navy/20 px-2 py-1.5 text-sm">
-                      {hourOptions(bounds.open + 1, bounds.close).map((h) => <option key={h} value={h}>{h}:00</option>)}
-                    </select>
-                  </label>
+                <div className="space-y-1.5">
+                  <div className="flex items-end gap-2">
+                    <label className="text-xs font-semibold text-navy/60">From
+                      <select value={fromHour} onChange={(e) => setFromHour(Number(e.target.value))} className="mt-1 block rounded-md border border-navy/20 px-2 py-1.5 text-sm">
+                        {hourOptions(earliestFrom, bounds.close - 1).map((h) => <option key={h} value={h}>{h}:00</option>)}
+                      </select>
+                    </label>
+                    <label className="text-xs font-semibold text-navy/60">To
+                      <select value={toHour} onChange={(e) => setToHour(Number(e.target.value))} className="mt-1 block rounded-md border border-navy/20 px-2 py-1.5 text-sm">
+                        {hourOptions(fromHour + 1, bounds.close).map((h) => <option key={h} value={h}>{h}:00</option>)}
+                      </select>
+                    </label>
+                  </div>
+                  <p className="text-[11px] text-navy/50">Minimum 2 hrs on weekdays · 4 hrs on weekends.</p>
                 </div>
               )}
               <button type="button" onClick={addDays} disabled={selectedResources.length === 0 || days.length === 0 || !bounds || adding}

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { auth } from "@/lib/auth";
 import InfinityMark from "@/components/InfinityMark";
+import MobileMenu from "@/components/MobileMenu";
 
 const navLinks = [
   { href: "/facilities", label: "Facilities" },
@@ -59,39 +60,8 @@ export default async function Header() {
           </Link>
         </div>
 
-        {/* Mobile menu — CSS-only so the header stays a server component */}
-        <details className="lg:hidden relative">
-          <summary className="list-none cursor-pointer rounded-md border border-white/20 px-3 py-2 text-sm font-semibold">
-            Menu
-          </summary>
-          <div className="absolute right-0 mt-2 w-56 rounded-xl bg-navy-deep p-3 shadow-2xl ring-1 ring-white/10 flex flex-col gap-1">
-            {navLinks.map((link) => (
-              <Link key={link.href} href={link.href} className="rounded-md px-3 py-2 text-sm hover:bg-white/10">
-                {link.label}
-              </Link>
-            ))}
-            <hr className="my-1 border-white/10" />
-            {user ? (
-              <>
-                <Link href="/dashboard" className="rounded-md px-3 py-2 text-sm hover:bg-white/10">
-                  My Account
-                </Link>
-                {(user.role === "ADMIN" || user.role === "STAFF") && (
-                  <Link href="/admin" className="rounded-md px-3 py-2 text-sm hover:bg-white/10">
-                    Admin
-                  </Link>
-                )}
-              </>
-            ) : (
-              <Link href="/login" className="rounded-md px-3 py-2 text-sm hover:bg-white/10">
-                Log in
-              </Link>
-            )}
-            <Link href="/book" className="btn-brand mt-1 rounded-md px-3 py-2 text-center text-sm font-bold uppercase">
-              Book a Field
-            </Link>
-          </div>
-        </details>
+        {/* Mobile menu (client component — closes itself on navigation) */}
+        <MobileMenu navLinks={navLinks} user={user ? { role: user.role } : null} />
       </div>
     </header>
   );
