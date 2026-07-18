@@ -3,8 +3,6 @@ import { randomUUID } from "crypto";
 import { prisma } from "@/lib/prisma";
 import { priceForHours } from "@/lib/pricing";
 import { parkNow, slotKey } from "@/lib/availability";
-import { getBookingPolicy } from "@/lib/policy";
-import { minHoursForDate, MIN_DURATION_MESSAGE } from "@/lib/bookingRules";
 
 const HEADERS = [
   "Ground",
@@ -128,13 +126,11 @@ export async function parseAndCreateBulk(
     return { created: 0, failed: 1, results: [{ row: 0, ok: false, message: "No sheet found in the file." }] };
   }
 
-  const [resources, policy] = await Promise.all([
-    prisma.resource.findMany({ where: { active: true } }),
-    getBookingPolicy(),
-  ]);
+  // Admin bulk upload is trusted: it may enter PAST dates and CUSTOM hours, and
+  // the 2h/4h minimum does NOT apply. The one hard rule kept is no overbooking
+  // (enforced by the unique slot constraint below).
+  const resources = await prisma.resource.findMany({ where: { active: true } });
   const byName = new Map(resources.map((r) => [r.name.trim().toLowerCase(), r]));
-  const now = parkNow();
-  const maxDate = addDaysStr(now.date, policy.advanceBookingDays);
 
   type Row = { rowNum: number; ground: string; date: string | null; from: number | null; to: number | null; org: string };
   const rows: Row[] = [];
@@ -162,17 +158,11 @@ export async function parseAndCreateBulk(
     const resource = byName.get(r.ground.toLowerCase());
     if (!resource) { fail(`Ground "${r.ground}" not found — use an exact name from the Available Grounds sheet.`); continue; }
     if (!r.date) { fail("Invalid or missing date — use YYYY-MM-DD."); continue; }
-    if (r.from == null || r.to == null) { fail("Invalid From/To — use whole hours 0–23."); continue; }
-    if (r.from < 0 || r.to > 24 || r.to <= r.from) { fail("From must be before To (hours 0–23)."); continue; }
-    if (r.date < now.date || r.date > maxDate) { fail(`Date must be between today and ${maxDate}.`); continue; }
-    if (r.date === now.date && r.from <= now.hour) { fail("That start time has already passed today."); continue; }
-    if (r.from < resource.openHour || r.to > resource.closeHour) {
-      fail(`Outside ${resource.name} hours (${resource.openHour}:00–${resource.closeHour}:00).`); continue;
-    }
-    const duration = r.to - r.from;
-    if (duration > policy.maxHoursPerSegment) { fail(`Max ${policy.maxHoursPerSegment} hours per booking.`); continue; }
-    if (duration < minHoursForDate(r.date)) { fail(MIN_DURATION_MESSAGE); continue; }
+    if (r.from == null || r.to == null) { fail("Invalid From/To — use whole hours 0–24."); continue; }
+    if (r.from < 0 || r.to > 24 || r.to <= r.from) { fail("From must be before To, within hours 0–24."); continue; }
     if (!r.org) { fail("Organization / Person is required."); continue; }
+    // Past dates and custom/short durations are intentionally allowed here.
+    const duration = r.to - r.from;
 
     const hours = Array.from({ length: duration }, (_, i) => (r.from as number) + i);
     const ref = `BULK-${randomUUID()}`;

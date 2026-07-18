@@ -25,13 +25,16 @@ export default async function BulkBookingsPage() {
         </li>
         <li>
           Fill one row per booking: <strong>Ground</strong> (exact name), <strong>Date</strong>{" "}
-          (YYYY-MM-DD), <strong>From</strong> and <strong>To</strong> (whole hours 0–23), and{" "}
+          (YYYY-MM-DD — <strong>past dates are allowed</strong>), <strong>From</strong> and{" "}
+          <strong>To</strong> (whole hours 0–24, any duration), and{" "}
           <strong>Organization / Person</strong>.
         </li>
         <li>
-          Upload the file below. Every row is validated (facility hours, availability, and the
-          minimum 2 hrs weekday / 4 hrs weekend rule); valid rows are booked and any problem rows are
-          listed so you can fix and re-upload just those.
+          Upload the file below. As an admin upload the usual booking limits don&apos;t apply — past
+          dates and custom/short hours are accepted, and the 2 hr / 4 hr minimum is waived. The only
+          rule enforced is <strong>no overbooking</strong>: a row whose slot is already taken is
+          rejected. Valid rows are booked; problem rows are listed so you can fix and re-upload just
+          those.
         </li>
       </ol>
 
