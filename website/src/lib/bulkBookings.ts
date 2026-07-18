@@ -10,6 +10,7 @@ const HEADERS = [
   "From (hour 0-23)",
   "To (hour 0-23)",
   "Organization / Person",
+  "Price/hr ($) — optional",
 ];
 
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -42,17 +43,18 @@ export async function buildSampleWorkbook(): Promise<Buffer> {
   sheet.columns = HEADERS.map((h, i) => ({
     header: h,
     key: `c${i}`,
-    width: i === 0 || i === 4 ? 28 : 18,
+    width: i === 0 || i === 4 ? 28 : i === 5 ? 22 : 18,
   }));
   sheet.getRow(1).font = { bold: true };
   sheet.getRow(1).alignment = { wrapText: true, vertical: "middle" };
 
-  // Example rows using real ground names + near-future dates.
+  // Example rows using real ground names + near-future dates. Price/hr is
+  // optional — one example sets it, one leaves it blank (uses standard pricing).
   const now = parkNow();
   const g0 = resources[0]?.name ?? "Cricket Ground A";
   const g1 = resources[1]?.name ?? g0;
-  sheet.addRow([g0, addDaysStr(now.date, 7), 18, 20, "Argyle Cricket Club"]);
-  sheet.addRow([g1, addDaysStr(now.date, 8), 9, 13, "John Smith"]);
+  sheet.addRow([g0, addDaysStr(now.date, 7), 18, 20, "Argyle Cricket Club", 50]);
+  sheet.addRow([g1, addDaysStr(now.date, 8), 9, 13, "John Smith", ""]);
 
   // Dropdown on the Ground column, referencing the Available Grounds list.
   if (lastGroundRow >= 2) {
@@ -99,6 +101,14 @@ function parseDate(v: ExcelJS.CellValue): string | null {
   return null;
 }
 
+/** Optional price-per-hour in dollars → cents, or null (use standard pricing). */
+function parsePriceCents(v: ExcelJS.CellValue): number | null {
+  if (v == null || v === "") return null;
+  const n = Number(String(v).replace(/[$,\s]/g, ""));
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.round(n * 100);
+}
+
 /** A shared system account that owns external/bulk bookings (no login). */
 async function getExternalUser() {
   return prisma.user.upsert({
@@ -132,7 +142,7 @@ export async function parseAndCreateBulk(
   const resources = await prisma.resource.findMany({ where: { active: true } });
   const byName = new Map(resources.map((r) => [r.name.trim().toLowerCase(), r]));
 
-  type Row = { rowNum: number; ground: string; date: string | null; from: number | null; to: number | null; org: string };
+  type Row = { rowNum: number; ground: string; date: string | null; from: number | null; to: number | null; org: string; priceCents: number | null };
   const rows: Row[] = [];
   sheet.eachRow((row, rowNumber) => {
     if (rowNumber === 1) return; // header
@@ -141,8 +151,9 @@ export async function parseAndCreateBulk(
     const from = parseHour(row.getCell(3).value);
     const to = parseHour(row.getCell(4).value);
     const org = String(row.getCell(5).value ?? "").trim();
+    const priceCents = parsePriceCents(row.getCell(6).value);
     if (!ground && !date && from == null && to == null && !org) return; // blank
-    rows.push({ rowNum: rowNumber, ground, date, from, to, org });
+    rows.push({ rowNum: rowNumber, ground, date, from, to, org, priceCents });
   });
 
   if (rows.length === 0) {
@@ -166,7 +177,9 @@ export async function parseAndCreateBulk(
 
     const hours = Array.from({ length: duration }, (_, i) => (r.from as number) + i);
     const ref = `BULK-${randomUUID()}`;
-    const total = priceForHours(resource, r.date, hours);
+    // Use the admin-entered price/hr when given, else the facility's standard price.
+    const total =
+      r.priceCents != null ? r.priceCents * duration : priceForHours(resource, r.date, hours);
     try {
       await prisma.$transaction(async (tx) => {
         const res = await tx.reservation.create({
@@ -180,7 +193,7 @@ export async function parseAndCreateBulk(
         });
       });
       created += 1;
-      results.push({ row: r.rowNum, ok: true, message: `${resource.name} · ${r.date} · ${r.from}:00–${r.to}:00 · ${r.org}` });
+      results.push({ row: r.rowNum, ok: true, message: `${resource.name} · ${r.date} · ${r.from}:00–${r.to}:00 · ${r.org} · $${(total / 100).toFixed(2)}` });
     } catch (error: unknown) {
       if ((error as { code?: string })?.code === "P2002") {
         fail(`Already booked — ${resource.name} ${r.date} ${r.from}:00–${r.to}:00.`);
