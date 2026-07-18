@@ -12,7 +12,15 @@ const credentialsSchema = z.object({
 });
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  session: { strategy: "jwt" },
+  session: {
+    strategy: "jwt",
+    // Inactivity timeout: the session is valid for 30 minutes and is refreshed
+    // on activity (any authenticated request), so 30 minutes with no activity
+    // invalidates it server-side. The client-side <IdleLogout> signs the user
+    // out immediately at 30 minutes idle for a cleaner experience.
+    maxAge: 30 * 60,
+    updateAge: 5 * 60,
+  },
   pages: { signIn: "/login" },
   providers: [
     Credentials({

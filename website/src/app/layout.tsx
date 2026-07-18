@@ -2,8 +2,11 @@ import type { Metadata } from "next";
 import { Inter, Barlow_Condensed } from "next/font/google";
 import "./globals.css";
 import { config } from "@/lib/config";
+import { auth } from "@/lib/auth";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
+import IdleLogout from "@/components/IdleLogout";
+import { idleLogoutAction } from "@/app/session-actions";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -33,14 +36,16 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const session = await auth();
   return (
     <html lang="en" className={`${inter.variable} ${barlow.variable} h-full antialiased`}>
       <body className="min-h-full flex flex-col">
+        {session?.user && <IdleLogout action={idleLogoutAction} />}
         <Header />
         <main className="flex-1">{children}</main>
         <Footer />

@@ -30,11 +30,11 @@ async function googleAction() {
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; timeout?: string }>;
 }) {
   const session = await auth();
   if (session?.user) redirect("/dashboard");
-  const { error } = await searchParams;
+  const { error, timeout } = await searchParams;
 
   return (
     <div className="mx-auto max-w-md px-4 py-16">
@@ -43,6 +43,11 @@ export default async function LoginPage({
         Book fields, manage reservations, and view your receipts.
       </p>
 
+      {timeout && !error && (
+        <p className="mt-4 rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800 ring-1 ring-amber-200">
+          You were signed out after 30 minutes of inactivity. Please log in again.
+        </p>
+      )}
       {error && (
         <p className="mt-4 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-red-200">
           Invalid email or password. Please try again.
