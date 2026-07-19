@@ -6,7 +6,6 @@ import { usePathname } from "next/navigation";
 const items: { href: string; label: string; exact?: boolean }[] = [
   { href: "/admin", label: "Dashboard", exact: true },
   { href: "/admin/bookings", label: "Bookings" },
-  { href: "/admin/bulk-bookings", label: "Bulk upload" },
   { href: "/admin/refunds", label: "Refunds" },
   { href: "/admin/maintenance", label: "Maintenance" },
   { href: "/admin/resources", label: "Facilities" },

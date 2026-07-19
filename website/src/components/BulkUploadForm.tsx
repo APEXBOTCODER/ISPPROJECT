@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
-import { uploadBulk, type UploadState } from "@/app/admin/bulk-bookings/actions";
+import { uploadBulk, type UploadState } from "@/app/admin/bookings/bulk/actions";
 
 const initial: UploadState = {};
 

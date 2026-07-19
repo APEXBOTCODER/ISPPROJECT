@@ -100,9 +100,14 @@ export default async function AdminBookingsPage({
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="display text-4xl text-navy">Bookings</h1>
-        <Link href="/admin/bookings/new" className="btn-brand rounded-md px-4 py-2 text-sm font-bold uppercase">
-          + New booking
-        </Link>
+        <div className="flex flex-wrap gap-2">
+          <Link href="/admin/bookings/bulk" className="rounded-md border border-navy/20 px-4 py-2 text-sm font-semibold text-navy hover:bg-navy/5">
+            Bulk upload (Excel)
+          </Link>
+          <Link href="/admin/bookings/new" className="btn-brand rounded-md px-4 py-2 text-sm font-bold uppercase">
+            + New booking
+          </Link>
+        </div>
       </div>
       <p className="mt-2 text-sm text-navy/60">
         Reschedule, mark no-shows, or refund. Tick reservations / day-segments then

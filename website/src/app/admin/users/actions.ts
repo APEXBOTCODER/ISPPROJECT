@@ -12,6 +12,42 @@ const profileSchema = z.object({
   name: z.string().min(2, "Name is too short.").max(100),
   email: z.string().email("Enter a valid email address.").max(200),
 });
+const createSchema = z.object({
+  name: z.string().min(2, "Name is too short.").max(100),
+  email: z.string().email("Enter a valid email address.").max(200),
+  role: z.enum(["CUSTOMER", "STAFF", "ADMIN"]),
+  password: z.string().min(8, "Password must be at least 8 characters.").max(128).optional(),
+});
+
+/** Create a new user account. ADMIN-only. Password is optional — leave it blank
+ *  to register an organization/person that won't log in (e.g. for bulk bookings). */
+export async function createUser(formData: FormData) {
+  await requireAdmin();
+  const password = String(formData.get("password") ?? "").trim() || undefined;
+  const parsed = createSchema.safeParse({
+    name: formData.get("name"),
+    email: String(formData.get("email") ?? "").toLowerCase(),
+    role: formData.get("role") || "CUSTOMER",
+    password,
+  });
+  if (!parsed.success) {
+    redirect("/admin/users?error=" + encodeURIComponent(parsed.error.issues[0]?.message ?? "Invalid input."));
+  }
+  const existing = await prisma.user.findUnique({ where: { email: parsed.data.email } });
+  if (existing) {
+    redirect("/admin/users?error=" + encodeURIComponent("An account with that email already exists."));
+  }
+  const user = await prisma.user.create({
+    data: {
+      name: parsed.data.name,
+      email: parsed.data.email,
+      role: parsed.data.role,
+      passwordHash: parsed.data.password ? await bcrypt.hash(parsed.data.password, 12) : undefined,
+      emailVerified: new Date(), // admin-created accounts are trusted
+    },
+  });
+  redirect(`/admin/users/${user.id}?ok=` + encodeURIComponent("User created."));
+}
 
 function back(userId: string, params: Record<string, string>): never {
   redirect(`/admin/users/${userId}?` + new URLSearchParams(params).toString());

@@ -108,6 +108,76 @@ export default function BookingWizard({
     setToHour((t) => (t <= fromHour ? Math.min(fromHour + 1, bounds.close) : t));
   }, [fromHour, bounds]);
 
+  // For a SINGLE selected day, hide hours that are already booked (free on ALL
+  // selected grounds). For multiple days one shared range can't reflect per-day
+  // availability, so we keep showing every hour.
+  const singleDay = days.length === 1 ? days[0] : null;
+  const [dayFree, setDayFree] = useState<Set<number> | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (!singleDay || selectedResources.length === 0) {
+      setDayFree(null);
+      return;
+    }
+    (async () => {
+      const perGround = await Promise.all(
+        selectedResources.map((r) => fetchDayAvailability(r.id, singleDay))
+      );
+      if (cancelled) return;
+      const freeCount = new Map<number, number>();
+      for (const slots of perGround) {
+        for (const s of slots) {
+          if (s.status === "free") freeCount.set(s.hour, (freeCount.get(s.hour) ?? 0) + 1);
+        }
+      }
+      const free = new Set<number>();
+      for (const [h, c] of freeCount) if (c === selectedResources.length) free.add(h);
+      setDayFree(free);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [singleDay, selectedResources]);
+
+  // "From" choices: within the window/earliest, and (single day) only free hours.
+  const fromOptions = useMemo(() => {
+    if (!bounds) return [] as number[];
+    let opts = Array.from({ length: bounds.close - earliestFrom }, (_, i) => earliestFrom + i);
+    if (dayFree) opts = opts.filter((h) => dayFree.has(h));
+    return opts;
+  }, [bounds, earliestFrom, dayFree]);
+
+  // Snap "from" onto a valid free hour when the availability changes.
+  useEffect(() => {
+    if (!dayFree || !bounds) return;
+    setFromHour((f) => {
+      if (dayFree.has(f) && f >= earliestFrom) return f;
+      for (let h = earliestFrom; h < bounds.close; h++) if (dayFree.has(h)) return h;
+      return f;
+    });
+  }, [dayFree, bounds, earliestFrom]);
+
+  // "To" choices: up to the end of the contiguous free run from "from" (single day).
+  const contiguousEnd = useMemo(() => {
+    if (!bounds || !dayFree) return bounds ? bounds.close : 0;
+    let end = fromHour;
+    while (end < bounds.close && dayFree.has(end)) end++;
+    return end;
+  }, [bounds, dayFree, fromHour]);
+  const toOptions = useMemo(() => {
+    if (!bounds) return [] as number[];
+    const hi = dayFree ? contiguousEnd : bounds.close;
+    return Array.from({ length: Math.max(0, hi - fromHour) }, (_, i) => fromHour + 1 + i).filter((h) => h <= hi);
+  }, [bounds, dayFree, contiguousEnd, fromHour]);
+
+  // Keep "to" within the contiguous free run on single-day availability.
+  useEffect(() => {
+    if (!dayFree || !bounds) return;
+    setToHour((t) => Math.min(Math.max(t, fromHour + 1), contiguousEnd));
+  }, [dayFree, fromHour, contiguousEnd, bounds]);
+
+  const dayFullyBooked = Boolean(dayFree) && fromOptions.length === 0;
+
   function toggleFacility(id: string) {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -170,7 +240,6 @@ export default function BookingWizard({
     [segments]
   );
   const grandTotal = segments.reduce((sum, s) => sum + s.subtotal, 0);
-  const hourOptions = (lo: number, hi: number) => Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
 
   return (
     <div className="grid gap-8 lg:grid-cols-[1fr_340px]">
@@ -237,21 +306,28 @@ export default function BookingWizard({
                 <p className="max-w-xs rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900 ring-1 ring-amber-200">
                   No more hours are available today for these grounds — deselect today and pick a future day.
                 </p>
+              ) : dayFullyBooked ? (
+                <p className="max-w-xs rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900 ring-1 ring-amber-200">
+                  All hours on {singleDay} are already booked for the selected ground
+                  {selectedResources.length > 1 ? "s" : ""}. Pick another day.
+                </p>
               ) : (
                 <div className="space-y-1.5">
                   <div className="flex items-end gap-2">
                     <label className="text-xs font-semibold text-navy/60">From
                       <select value={fromHour} onChange={(e) => setFromHour(Number(e.target.value))} className="mt-1 block rounded-md border border-navy/20 px-2 py-1.5 text-sm">
-                        {hourOptions(earliestFrom, bounds.close - 1).map((h) => <option key={h} value={h}>{h}:00</option>)}
+                        {fromOptions.map((h) => <option key={h} value={h}>{h}:00</option>)}
                       </select>
                     </label>
                     <label className="text-xs font-semibold text-navy/60">To
                       <select value={toHour} onChange={(e) => setToHour(Number(e.target.value))} className="mt-1 block rounded-md border border-navy/20 px-2 py-1.5 text-sm">
-                        {hourOptions(fromHour + 1, bounds.close).map((h) => <option key={h} value={h}>{h}:00</option>)}
+                        {toOptions.map((h) => <option key={h} value={h}>{h}:00</option>)}
                       </select>
                     </label>
                   </div>
-                  <p className="text-[11px] text-navy/50">Minimum 2 hrs on weekdays · 4 hrs on weekends.</p>
+                  <p className="text-[11px] text-navy/50">
+                    {dayFree ? "Showing only available hours. " : ""}Minimum 2 hrs on weekdays · 4 hrs on weekends.
+                  </p>
                 </div>
               )}
               <button type="button" onClick={addDays} disabled={selectedResources.length === 0 || days.length === 0 || !bounds || adding}
