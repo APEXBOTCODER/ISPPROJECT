@@ -26,9 +26,10 @@ export default async function BulkBookingsPage() {
         <li>
           Fill one row per booking: <strong>Ground</strong> (exact name), <strong>Date</strong>{" "}
           (YYYY-MM-DD — <strong>past dates are allowed</strong>), <strong>From</strong> and{" "}
-          <strong>To</strong> (whole hours 0–24, any duration), <strong>Organization / Person</strong>,
-          and an optional <strong>Price/hr ($)</strong> — leave it blank to use the facility&apos;s
-          standard pricing.
+          <strong>To</strong> (whole hours 0–24, any duration), <strong>Organization / Person</strong>{" "}
+          (the exact <strong>name or email of an existing registered user</strong> — rows for
+          unknown people are rejected, not created), and an optional <strong>Price/hr ($)</strong> —
+          leave it blank to use the facility&apos;s standard pricing.
         </li>
         <li>
           Upload the file below. As an admin upload the usual booking limits don&apos;t apply — past

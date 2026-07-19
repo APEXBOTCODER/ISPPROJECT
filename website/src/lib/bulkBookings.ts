@@ -9,7 +9,7 @@ const HEADERS = [
   "Date (YYYY-MM-DD)",
   "From (hour 0-23)",
   "To (hour 0-23)",
-  "Organization / Person",
+  "Organization / Person (registered name or email)",
   "Price/hr ($) — optional",
 ];
 
@@ -109,20 +109,6 @@ function parsePriceCents(v: ExcelJS.CellValue): number | null {
   return Math.round(n * 100);
 }
 
-/** A shared system account that owns external/bulk bookings (no login). */
-async function getExternalUser() {
-  return prisma.user.upsert({
-    where: { email: "external-bookings@infinitysportspark.invalid" },
-    update: {},
-    create: {
-      email: "external-bookings@infinitysportspark.invalid",
-      name: "External / Bulk Bookings",
-      role: "CUSTOMER",
-      emailVerified: new Date(),
-    },
-  });
-}
-
 /** Read the uploaded workbook, validate each row, and create confirmed bookings.
  *  Every row is independent — a bad row is reported and the rest still proceed. */
 export async function parseAndCreateBulk(
@@ -138,9 +124,21 @@ export async function parseAndCreateBulk(
 
   // Admin bulk upload is trusted: it may enter PAST dates and CUSTOM hours, and
   // the 2h/4h minimum does NOT apply. The one hard rule kept is no overbooking
-  // (enforced by the unique slot constraint below).
-  const resources = await prisma.resource.findMany({ where: { active: true } });
-  const byName = new Map(resources.map((r) => [r.name.trim().toLowerCase(), r]));
+  // (enforced by the unique slot constraint below). The Organization / Person
+  // must match an EXISTING user (by exact name or email) — we never auto-create.
+  const [resources, users] = await Promise.all([
+    prisma.resource.findMany({ where: { active: true } }),
+    prisma.user.findMany({ select: { id: true, name: true, email: true } }),
+  ]);
+  const resourceByName = new Map(resources.map((r) => [r.name.trim().toLowerCase(), r]));
+  const userByEmail = new Map(users.map((u) => [u.email.toLowerCase(), u]));
+  const userByName = new Map<string, typeof users>();
+  for (const u of users) {
+    const k = u.name.trim().toLowerCase();
+    const arr = userByName.get(k) ?? [];
+    arr.push(u);
+    userByName.set(k, arr);
+  }
 
   type Row = { rowNum: number; ground: string; date: string | null; from: number | null; to: number | null; org: string; priceCents: number | null };
   const rows: Row[] = [];
@@ -160,18 +158,32 @@ export async function parseAndCreateBulk(
     return { created: 0, failed: 1, results: [{ row: 0, ok: false, message: "No data rows found (fill rows under the header)." }] };
   }
 
-  const externalUser = await getExternalUser();
   const results: BulkRowResult[] = [];
   let created = 0;
 
   for (const r of rows) {
     const fail = (message: string) => results.push({ row: r.rowNum, ok: false, message });
-    const resource = byName.get(r.ground.toLowerCase());
+    const resource = resourceByName.get(r.ground.toLowerCase());
     if (!resource) { fail(`Ground "${r.ground}" not found — use an exact name from the Available Grounds sheet.`); continue; }
     if (!r.date) { fail("Invalid or missing date — use YYYY-MM-DD."); continue; }
     if (r.from == null || r.to == null) { fail("Invalid From/To — use whole hours 0–24."); continue; }
     if (r.from < 0 || r.to > 24 || r.to <= r.from) { fail("From must be before To, within hours 0–24."); continue; }
     if (!r.org) { fail("Organization / Person is required."); continue; }
+
+    // The Organization / Person must be an existing user — matched by email if
+    // the value looks like an email, otherwise by exact (case-insensitive) name.
+    let ownerId: string;
+    if (r.org.includes("@")) {
+      const u = userByEmail.get(r.org.toLowerCase());
+      if (!u) { fail(`Organization / Person "${r.org}" doesn't exist — no account with that email. Create the user first.`); continue; }
+      ownerId = u.id;
+    } else {
+      const matches = userByName.get(r.org.toLowerCase()) ?? [];
+      if (matches.length === 0) { fail(`Organization / Person "${r.org}" doesn't exist — create the user account first (or use their email).`); continue; }
+      if (matches.length > 1) { fail(`Multiple users are named "${r.org}" — put their email in this column instead.`); continue; }
+      ownerId = matches[0].id;
+    }
+
     // Past dates and custom/short durations are intentionally allowed here.
     const duration = r.to - r.from;
 
@@ -183,10 +195,10 @@ export async function parseAndCreateBulk(
     try {
       await prisma.$transaction(async (tx) => {
         const res = await tx.reservation.create({
-          data: { userId: externalUser.id, kind: "BOOKING", label: r.org, totalCents: total, status: "CONFIRMED", paymentRef: ref, notes: `Bulk upload by ${staff.name}` },
+          data: { userId: ownerId, kind: "BOOKING", label: r.org, totalCents: total, status: "CONFIRMED", paymentRef: ref, notes: `Bulk upload by ${staff.name}` },
         });
         const booking = await tx.booking.create({
-          data: { userId: externalUser.id, reservationId: res.id, resourceId: resource.id, date: r.date as string, startHour: r.from as number, endHour: r.to as number, status: "CONFIRMED", totalCents: total, paymentRef: ref },
+          data: { userId: ownerId, reservationId: res.id, resourceId: resource.id, date: r.date as string, startHour: r.from as number, endHour: r.to as number, status: "CONFIRMED", totalCents: total, paymentRef: ref },
         });
         await tx.bookingSlot.createMany({
           data: hours.map((h) => ({ bookingId: booking.id, resourceId: resource.id, slotKey: slotKey(r.date as string, h) })),

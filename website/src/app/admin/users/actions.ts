@@ -8,9 +8,36 @@ import { prisma } from "@/lib/prisma";
 
 const roleSchema = z.enum(["CUSTOMER", "STAFF", "ADMIN"]);
 const passwordSchema = z.string().min(8, "Temporary password must be at least 8 characters.").max(100);
+const profileSchema = z.object({
+  name: z.string().min(2, "Name is too short.").max(100),
+  email: z.string().email("Enter a valid email address.").max(200),
+});
 
 function back(userId: string, params: Record<string, string>): never {
   redirect(`/admin/users/${userId}?` + new URLSearchParams(params).toString());
+}
+
+/** Update a user's display name and email. ADMIN-only. Useful for registering an
+ *  organization/person as an account so bulk bookings can be attributed to them. */
+export async function updateUserProfile(formData: FormData) {
+  await requireAdmin();
+  const userId = String(formData.get("userId") ?? "");
+  if (!userId) redirect("/admin/users");
+  const parsed = profileSchema.safeParse({
+    name: formData.get("name"),
+    email: String(formData.get("email") ?? "").toLowerCase(),
+  });
+  if (!parsed.success) back(userId, { error: parsed.error.issues[0]?.message ?? "Invalid input." });
+
+  const clash = await prisma.user.findUnique({ where: { email: parsed.data.email } });
+  if (clash && clash.id !== userId) {
+    back(userId, { error: "That email is already used by another account." });
+  }
+  await prisma.user.update({
+    where: { id: userId },
+    data: { name: parsed.data.name, email: parsed.data.email },
+  });
+  back(userId, { ok: "Profile updated." });
 }
 
 /** Change a user's role. ADMIN-only; cannot change your own role. */

@@ -4,7 +4,7 @@ import { requireStaff } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { formatCents } from "@/lib/pricing";
 import { userRefundCapCents } from "@/lib/reservations";
-import { setUserRole, setManualVerified, setUserActive, resetUserPassword } from "../actions";
+import { setUserRole, setManualVerified, setUserActive, resetUserPassword, updateUserProfile } from "../actions";
 
 export const metadata = { title: "Admin · User" };
 export const dynamic = "force-dynamic";
@@ -148,6 +148,44 @@ export default async function AdminUserDetailPage({
           )}
         </div>
       </section>
+
+      {/* Edit profile */}
+      {isAdmin && (
+        <section className="mt-6 rounded-2xl border border-navy/10 p-5">
+          <h2 className="display text-xl text-navy">Edit profile</h2>
+          <p className="mt-1 text-sm text-navy/60">
+            Update this account&apos;s name and email — e.g. to register an organization or person so
+            bulk bookings can be attributed to them.
+          </p>
+          <form action={updateUserProfile} className="mt-3 grid gap-3 sm:grid-cols-2">
+            <input type="hidden" name="userId" value={user.id} />
+            <label className="text-xs font-semibold uppercase tracking-wide text-navy/60">
+              Name
+              <input
+                name="name"
+                defaultValue={user.name}
+                required
+                className="mt-1 block w-full rounded-md border border-navy/20 px-3 py-2 text-sm focus:border-sky focus:outline-none focus:ring-2 focus:ring-sky/30"
+              />
+            </label>
+            <label className="text-xs font-semibold uppercase tracking-wide text-navy/60">
+              Email
+              <input
+                name="email"
+                type="email"
+                defaultValue={user.email}
+                required
+                className="mt-1 block w-full rounded-md border border-navy/20 px-3 py-2 text-sm focus:border-sky focus:outline-none focus:ring-2 focus:ring-sky/30"
+              />
+            </label>
+            <div className="sm:col-span-2">
+              <button className="rounded-md border border-navy/20 px-4 py-2 text-sm font-semibold text-navy hover:bg-navy/5">
+                Save profile
+              </button>
+            </div>
+          </form>
+        </section>
+      )}
 
       {/* Login & password */}
       <section className="mt-6 rounded-2xl border border-navy/10 p-5">
