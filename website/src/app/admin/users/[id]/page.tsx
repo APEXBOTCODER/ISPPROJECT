@@ -49,6 +49,10 @@ export default async function AdminUserDetailPage({
 
   const isAdmin = staff.role === "ADMIN";
   const isSelf = staff.id === user.id;
+  const invTo = new Date().toISOString().slice(0, 10);
+  const invFromDate = new Date();
+  invFromDate.setDate(invFromDate.getDate() - 30);
+  const invFrom = invFromDate.toISOString().slice(0, 10);
 
   return (
     <div>
@@ -228,6 +232,27 @@ export default async function AdminUserDetailPage({
           Share the temporary password with the user over a trusted channel. It&apos;s shown in plain text so
           you can pass it on; ask them to change it after signing in.
         </p>
+      </section>
+
+      {/* Invoice */}
+      <section className="mt-6 rounded-2xl border border-navy/10 p-5">
+        <h2 className="display text-xl text-navy">Invoice</h2>
+        <p className="mt-1 text-sm text-navy/60">
+          Generate a PDF invoice of this user&apos;s confirmed bookings between two dates.
+        </p>
+        <form method="get" action={`/api/admin/invoice/${user.id}`} className="mt-3 flex flex-wrap items-end gap-2">
+          <label className="text-xs font-semibold uppercase tracking-wide text-navy/60">
+            From
+            <input type="date" name="from" defaultValue={invFrom} className="mt-1 block rounded-md border border-navy/20 px-3 py-2 text-sm" />
+          </label>
+          <label className="text-xs font-semibold uppercase tracking-wide text-navy/60">
+            To
+            <input type="date" name="to" defaultValue={invTo} className="mt-1 block rounded-md border border-navy/20 px-3 py-2 text-sm" />
+          </label>
+          <button className="rounded-md border border-navy/20 px-4 py-2 text-sm font-semibold text-navy hover:bg-navy/5">
+            Download invoice (PDF)
+          </button>
+        </form>
       </section>
 
       {/* Reservations */}

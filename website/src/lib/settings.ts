@@ -9,6 +9,8 @@ export const SETTING_DEFAULTS = {
   "contact.email": "hello@infinitysportspark.com",
   "contact.phone": "940-233-8993",
   "contact.address": "Denton County, Texas",
+  "payment.zelleEmail": "infinitysportspark@gmail.com",
+  "payment.zelleName": "Infinity Sports Park LLC",
   "soccer.comingSoon": "true",
   "soccer.bannerText":
     "Soccer is coming soon — fields are being finished ahead of our Summer 2026 launch.",
@@ -47,6 +49,18 @@ export const SETTING_FIELDS: {
     label: "Contact: address",
     help: "Public address / location shown on the Contact page and in the footer.",
     type: "textarea",
+  },
+  {
+    key: "payment.zelleEmail",
+    label: "Payment: Zelle email",
+    help: "Zelle address customers send payment to (shown on the confirmation page + email).",
+    type: "email",
+  },
+  {
+    key: "payment.zelleName",
+    label: "Payment: Zelle recipient name",
+    help: "The Zelle account name customers should see when paying.",
+    type: "text",
   },
   {
     key: "soccer.comingSoon",

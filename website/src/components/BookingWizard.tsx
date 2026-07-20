@@ -46,14 +46,12 @@ export default function BookingWizard({
   maxAdvanceDays,
   maxHoursPerSegment,
   maxSegmentsPerReservation,
-  isMockPayments,
 }: {
   resources: ResourceOption[];
   createReservation: (formData: FormData) => Promise<void>;
   maxAdvanceDays: number;
   maxHoursPerSegment: number;
   maxSegmentsPerReservation: number;
-  isMockPayments: boolean;
 }) {
   const sports = useMemo(() => Array.from(new Set(resources.map((r) => r.sport))), [resources]);
   const [sport, setSport] = useState(sports[0] ?? "CRICKET");
@@ -376,12 +374,13 @@ export default function BookingWizard({
               <input type="hidden" name="segments" value={JSON.stringify(submitSegments)} />
               <button type="submit" disabled={submitting || submitSegments.length === 0}
                 className="btn-brand w-full rounded-md px-4 py-3 uppercase tracking-wide disabled:opacity-60">
-                {submitting ? "Processing…" : `Confirm & Pay ${money(grandTotal)}`}
+                {submitting ? "Reserving…" : `Reserve ${money(grandTotal)}`}
               </button>
             </form>
-            {isMockPayments && (
-              <p className="mt-3 rounded-md bg-sky/20 px-3 py-2 text-xs text-white/90">Test mode — payment is simulated, no card is charged.</p>
-            )}
+            <p className="mt-3 rounded-md bg-sky/20 px-3 py-2 text-xs text-white/90">
+              Your slots are held on submit. You&apos;ll get a Reservation ID and Zelle payment
+              instructions — pay to confirm.
+            </p>
           </>
         )}
       </aside>

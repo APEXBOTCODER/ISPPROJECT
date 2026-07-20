@@ -62,6 +62,7 @@ model RefundRecord {
 // with one Booking.
 model Reservation {
   id            String   @id @default(cuid())
+  code          String?  @unique // short human code for the Zelle memo (e.g. ISP-ABC234)
   userId        String
   kind          String   @default("BOOKING") // BOOKING | BLOCK
   label         String? // entity/org name (bookings) or reason (blocks)

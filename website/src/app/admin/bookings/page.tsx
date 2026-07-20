@@ -6,8 +6,9 @@ import RefundWorkbench, {
   type WorkbenchReservation,
   type WorkbenchStandalone,
 } from "@/components/RefundWorkbench";
+import { formatCents } from "@/lib/pricing";
 import { bulkRefund } from "@/app/admin/refunds/actions";
-import { toggleNoShow } from "./actions";
+import { toggleNoShow, confirmReservationPayment, confirmAllForUser } from "./actions";
 
 export const metadata = { title: "Admin · Bookings & refunds" };
 export const dynamic = "force-dynamic";
@@ -25,9 +26,9 @@ export default async function AdminBookingsPage({
     filterParam === "upcoming" || filterParam === "past" ? filterParam : "all";
   const now = parkNow();
 
-  const [reservationRows, standaloneRows] = await Promise.all([
+  const [reservationRows, standaloneRows, pendingRows] = await Promise.all([
     prisma.reservation.findMany({
-      where: { kind: "BOOKING" },
+      where: { kind: "BOOKING", status: { not: "PENDING_PAYMENT" } },
       include: {
         user: true,
         bookings: { include: { resource: true }, orderBy: [{ date: "asc" }, { startHour: "asc" }] },
@@ -41,7 +42,27 @@ export default async function AdminBookingsPage({
       orderBy: [{ date: "desc" }, { startHour: "desc" }],
       take: 200,
     }),
+    prisma.reservation.findMany({
+      where: { kind: "BOOKING", status: "PENDING_PAYMENT" },
+      include: {
+        user: true,
+        bookings: { include: { resource: true }, orderBy: [{ date: "asc" }, { startHour: "asc" }] },
+      },
+      orderBy: { createdAt: "asc" },
+    }),
   ]);
+
+  // Group pending-payment reservations by user for the confirm-payment panel.
+  const pendingByUser = Array.from(
+    pendingRows
+      .reduce((m, r) => {
+        const g = m.get(r.userId) ?? { user: r.user, reservations: [] as typeof pendingRows };
+        g.reservations.push(r);
+        m.set(r.userId, g);
+        return m;
+      }, new Map<string, { user: (typeof pendingRows)[number]["user"]; reservations: typeof pendingRows }>())
+      .values()
+  );
 
   const maxDate = (dates: string[]) => (dates.length ? dates.slice().sort().at(-1)! : "");
   const inFilter = (d: string) =>
@@ -126,6 +147,56 @@ export default async function AdminBookingsPage({
       )}
       {error && (
         <p className="mt-4 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-red-200">{error}</p>
+      )}
+
+      {/* Awaiting Zelle payment — confirm once the transfer is received */}
+      {pendingByUser.length > 0 && (
+        <section className="mt-6 rounded-2xl border-2 border-amber-300 bg-amber-50/50 p-5">
+          <h2 className="display text-2xl text-navy">
+            Awaiting Zelle payment ({pendingRows.length})
+          </h2>
+          <p className="mt-1 text-sm text-navy/70">
+            Match the Zelle memo to the Reservation ID, then confirm. Confirming emails the customer a
+            payment confirmation. Grouped by user — confirm one or all of a user&apos;s reservations.
+          </p>
+          <div className="mt-4 space-y-4">
+            {pendingByUser.map(({ user, reservations: userRes }) => (
+              <div key={user.id} className="rounded-xl border border-navy/10 bg-white p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-sm font-semibold text-navy">
+                    {user.name} <span className="font-normal text-navy/50">· {user.email}</span>
+                  </span>
+                  <form action={confirmAllForUser}>
+                    <input type="hidden" name="userId" value={user.id} />
+                    <button className="rounded-md border border-green-300 bg-green-50 px-3 py-1.5 text-xs font-bold uppercase text-green-700 hover:bg-green-100">
+                      Confirm all ({userRes.length})
+                    </button>
+                  </form>
+                </div>
+                <ul className="mt-2 space-y-2">
+                  {userRes.map((r) => (
+                    <li key={r.id} className="flex flex-wrap items-start justify-between gap-3 border-t border-navy/5 pt-2 text-sm">
+                      <span>
+                        <span className="font-mono font-bold text-navy">{r.code ?? r.id.slice(-6)}</span>
+                        {r.label ? <span className="text-navy/70"> · {r.label}</span> : ""}
+                        <span className="ml-1 font-semibold text-navy">· {formatCents(r.totalCents)}</span>
+                        <span className="block text-xs text-navy/60">
+                          {r.bookings.map((b) => `${b.resource.name} ${b.date} ${b.startHour}:00–${b.endHour}:00`).join(" · ")}
+                        </span>
+                      </span>
+                      <form action={confirmReservationPayment}>
+                        <input type="hidden" name="reservationId" value={r.id} />
+                        <button className="rounded-md bg-green-600 px-3 py-1.5 text-xs font-bold uppercase text-white hover:bg-green-700">
+                          Confirm payment
+                        </button>
+                      </form>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </section>
       )}
 
       <div className="mt-6">

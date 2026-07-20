@@ -7,12 +7,21 @@ import { prisma } from "@/lib/prisma";
 import { config } from "@/lib/config";
 import { priceForHours, formatCents } from "@/lib/pricing";
 import { parkNow, slotKey, findSlotConflicts } from "@/lib/availability";
-import { processPayment } from "@/lib/payments";
 import { sendEmail } from "@/lib/email";
 import { hasCurrentWaiver } from "@/lib/waiver";
 import { hasVerifiedEmail } from "@/lib/verification";
 import { getBookingPolicy } from "@/lib/policy";
 import { minHoursForDate, MIN_DURATION_MESSAGE } from "@/lib/bookingRules";
+import { getSettings } from "@/lib/settings";
+import { makeReservationCode } from "@/lib/reservationCode";
+
+async function uniqueReservationCode(): Promise<string> {
+  for (let i = 0; i < 8; i++) {
+    const code = makeReservationCode();
+    if (!(await prisma.reservation.findUnique({ where: { code } }))) return code;
+  }
+  return `ISP-${Date.now().toString(36).toUpperCase()}`;
+}
 
 // Hard safety bounds; the *policy* caps (maxHoursPerSegment / maxSegmentsPerReservation)
 // are enforced inside createReservation against the live booking policy.
@@ -146,18 +155,22 @@ export async function createReservation(formData: FormData) {
   }
 
   const grandTotal = prepared.reduce((sum, s) => sum + s.totalCents, 0);
+  const segmentCount = prepared.length;
+  const code = await uniqueReservationCode();
 
-  // Hold: reservation + one booking per segment + all slot rows, atomically.
+  // Create the reservation in PENDING_PAYMENT: slots are held (double-book guard)
+  // but it isn't confirmed until staff verify the offline (Zelle) payment.
   let reservationId: string;
   try {
     const reservation = await prisma.$transaction(async (tx) => {
       const res = await tx.reservation.create({
         data: {
           userId,
+          code,
           kind: "BOOKING",
           label: label ?? null,
           totalCents: grandTotal,
-          status: "PENDING",
+          status: "PENDING_PAYMENT",
         },
       });
       for (const seg of prepared) {
@@ -169,7 +182,7 @@ export async function createReservation(formData: FormData) {
             date: seg.date,
             startHour: seg.startHour,
             endHour: seg.endHour,
-            status: "PENDING",
+            status: "PENDING_PAYMENT",
             totalCents: seg.totalCents,
           },
         });
@@ -196,66 +209,35 @@ export async function createReservation(formData: FormData) {
     throw error;
   }
 
-  // One payment for the whole reservation.
-  const segmentCount = prepared.length;
-  const payment = await processPayment({
-    amountCents: grandTotal,
-    description:
-      segmentCount === 1
-        ? `${prepared[0].resourceName} on ${prepared[0].date}`
-        : `Reservation — ${segmentCount} sessions`,
-    customerEmail: session.user.email ?? "",
-  });
-
-  if (!payment.ok) {
-    await prisma.$transaction([
-      prisma.booking.updateMany({
-        where: { reservationId },
-        data: { status: "CANCELLED", notes: `Payment failed: ${payment.error}` },
-      }),
-      prisma.bookingSlot.deleteMany({ where: { booking: { reservationId } } }),
-      prisma.reservation.update({
-        where: { id: reservationId },
-        data: { status: "CANCELLED", notes: `Payment failed: ${payment.error}` },
-      }),
-    ]);
-    bail(payment.error);
-  }
-
-  await prisma.$transaction([
-    prisma.reservation.update({
-      where: { id: reservationId },
-      data: { status: "CONFIRMED", paymentRef: payment.ref },
-    }),
-    prisma.booking.updateMany({
-      where: { reservationId },
-      data: { status: "CONFIRMED", paymentRef: payment.ref },
-    }),
-  ]);
-
+  // Offline payment: email the Zelle instructions. Staff confirm on receipt.
+  const settings = await getSettings();
+  const zelleEmail = settings["payment.zelleEmail"];
+  const zelleName = settings["payment.zelleName"];
   await sendEmail({
     to: session.user.email ?? "",
-    subject:
-      segmentCount === 1
-        ? `Booking confirmed — ${prepared[0].resourceName} on ${prepared[0].date}`
-        : `Reservation confirmed — ${segmentCount} sessions at Infinity Sports Park`,
+    subject: `Reservation ${code} — payment pending (${formatCents(grandTotal)})`,
     text: [
       `Hi ${session.user.name ?? "there"},`,
       ``,
-      segmentCount === 1 ? `Your booking is confirmed!` : `Your reservation is confirmed!`,
+      `Thanks! Your ${segmentCount === 1 ? "booking" : "reservation"} is held and awaiting payment.`,
+      `Reservation ID: ${code}   (status: Pending payment verification)`,
       ...(label ? [`Organization: ${label}`] : []),
       ``,
       ...prepared.map(
-        (s) =>
-          `  • ${s.resourceName} — ${s.date}, ${s.startHour}:00–${s.endHour}:00 (US Central) — ${formatCents(s.totalCents)}`
+        (s) => `  • ${s.resourceName} — ${s.date}, ${s.startHour}:00–${s.endHour}:00 (US Central) — ${formatCents(s.totalCents)}`
       ),
       ``,
-      `  Total:  ${formatCents(grandTotal)}`,
-      `  Ref:    ${payment.ref}`,
+      `  Amount due: ${formatCents(grandTotal)}`,
       ``,
-      `Manage or cancel any time: ${config.siteUrl}/dashboard`,
+      `HOW TO PAY (Zelle):`,
+      `  Send ${formatCents(grandTotal)} via Zelle to ${zelleEmail}`,
+      `  Zelle name: ${zelleName}`,
+      `  IMPORTANT: put your Reservation ID "${code}" in the Zelle memo so we can match your payment.`,
       ``,
-      `See you on the field!`,
+      `Once we receive your payment we'll confirm the reservation and email you a confirmation.`,
+      ``,
+      `View it any time: ${config.siteUrl}/dashboard`,
+      ``,
       `Infinity Sports Park — ${config.tagline}`,
     ].join("\n"),
   });

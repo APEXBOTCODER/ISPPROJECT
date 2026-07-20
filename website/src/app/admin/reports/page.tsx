@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { formatCents } from "@/lib/pricing";
 import { parkNow } from "@/lib/availability";
 import ReportRangePicker from "@/components/ReportRangePicker";
+import UserRevenueSelect from "@/components/UserRevenueSelect";
 
 export const metadata = { title: "Admin · Reports" };
 export const dynamic = "force-dynamic";
@@ -22,7 +23,7 @@ function daysInclusive(from: string, to: string): number {
 export default async function AdminReportsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ from?: string; to?: string }>;
+  searchParams: Promise<{ from?: string; to?: string; users?: string }>;
 }) {
   await requireStaff();
   const now = parkNow();
@@ -58,6 +59,38 @@ export default async function AdminReportsPage({
   const revenue = revenueAgg._sum.totalCents ?? 0;
   const refunded = refundAgg._sum.amountCents ?? 0;
   const numDays = daysInclusive(from, to);
+
+  // Revenue by user (only when specific users are selected).
+  const userIds = (sp.users ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  let userRevenue: { id: string; name: string; email: string; bookings: number; revenue: number; refunds: number }[] = [];
+  let selectedUsers: { id: string; name: string }[] = [];
+  if (userIds.length) {
+    const [selUsers, revByUser, refByUser] = await Promise.all([
+      prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true, email: true } }),
+      prisma.booking.groupBy({
+        by: ["userId"],
+        where: { userId: { in: userIds }, status: "CONFIRMED", date: { gte: from, lte: to } },
+        _sum: { totalCents: true },
+        _count: { _all: true },
+      }),
+      prisma.refundRecord.groupBy({
+        by: ["userId"],
+        where: { userId: { in: userIds }, createdAt: { gte: rangeStart, lt: rangeEnd } },
+        _sum: { amountCents: true },
+      }),
+    ]);
+    const revMap = new Map(revByUser.map((r) => [r.userId, { sum: r._sum.totalCents ?? 0, count: r._count._all }]));
+    const refMap = new Map(refByUser.map((r) => [r.userId, r._sum.amountCents ?? 0]));
+    userRevenue = selUsers.map((u) => ({
+      id: u.id,
+      name: u.name,
+      email: u.email,
+      bookings: revMap.get(u.id)?.count ?? 0,
+      revenue: revMap.get(u.id)?.sum ?? 0,
+      refunds: refMap.get(u.id) ?? 0,
+    }));
+    selectedUsers = selUsers.map((u) => ({ id: u.id, name: u.name }));
+  }
 
   // Utilization per facility: booked confirmed slot-hours ÷ available slot-hours.
   const util = await Promise.all(
@@ -101,6 +134,55 @@ export default async function AdminReportsPage({
       <p className="mt-2 text-xs text-navy/50">
         Revenue &amp; bookings are counted by session date; refunds &amp; cancellations by the date they were processed.
       </p>
+
+      <section className="mt-10">
+        <h2 className="display text-2xl text-navy">Revenue by user</h2>
+        <p className="mt-1 text-sm text-navy/60">
+          Search and select one or more users to see their confirmed revenue (minus refunds) for the
+          date range above.
+        </p>
+        <div className="mt-3">
+          <UserRevenueSelect from={from} to={to} initial={selectedUsers} />
+        </div>
+        {userRevenue.length > 0 && (
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full min-w-[560px] text-left text-sm">
+              <thead>
+                <tr className="border-b border-navy/15 text-xs uppercase text-navy/50">
+                  <th className="py-2 pr-4">User</th>
+                  <th className="py-2 pr-4">Bookings</th>
+                  <th className="py-2 pr-4">Revenue</th>
+                  <th className="py-2 pr-4">Refunds</th>
+                  <th className="py-2">Net</th>
+                </tr>
+              </thead>
+              <tbody>
+                {userRevenue.map((u) => (
+                  <tr key={u.id} className="border-b border-navy/5">
+                    <td className="py-2.5 pr-4">
+                      <span className="font-medium text-navy">{u.name}</span>
+                      <span className="block text-xs text-navy/50">{u.email}</span>
+                    </td>
+                    <td className="py-2.5 pr-4">{u.bookings}</td>
+                    <td className="py-2.5 pr-4">{formatCents(u.revenue)}</td>
+                    <td className="py-2.5 pr-4 text-navy/60">{formatCents(u.refunds)}</td>
+                    <td className="py-2.5 font-semibold text-navy">{formatCents(u.revenue - u.refunds)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t-2 border-navy/15 font-bold text-navy">
+                  <td className="py-2 pr-4">Total</td>
+                  <td className="py-2 pr-4">{userRevenue.reduce((s, u) => s + u.bookings, 0)}</td>
+                  <td className="py-2 pr-4">{formatCents(userRevenue.reduce((s, u) => s + u.revenue, 0))}</td>
+                  <td className="py-2 pr-4">{formatCents(userRevenue.reduce((s, u) => s + u.refunds, 0))}</td>
+                  <td className="py-2">{formatCents(userRevenue.reduce((s, u) => s + u.revenue - u.refunds, 0))}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
+      </section>
 
       <section className="mt-10">
         <h2 className="display text-2xl text-navy">Utilization by facility ({numDays} days)</h2>

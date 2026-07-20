@@ -14,8 +14,10 @@ export const dynamic = "force-dynamic";
 const statusStyles: Record<string, string> = {
   CONFIRMED: "bg-green-50 text-green-700 ring-green-200",
   PENDING: "bg-amber-50 text-amber-700 ring-amber-200",
+  PENDING_PAYMENT: "bg-amber-50 text-amber-700 ring-amber-200",
   CANCELLED: "bg-navy/5 text-navy/50 ring-navy/10",
 };
+const statusLabel = (s: string) => (s === "PENDING_PAYMENT" ? "Pending payment" : s);
 
 export default async function DashboardPage({
   searchParams,
@@ -251,7 +253,7 @@ export default async function DashboardPage({
                         </div>
                         <div className="flex items-center gap-3">
                           <span className={`rounded-full px-3 py-1 text-xs font-semibold ring-1 ${statusStyles[b.status] ?? statusStyles.CANCELLED}`}>
-                            {b.status}
+                            {statusLabel(b.status)}
                           </span>
                           {b.status === "CONFIRMED" && (
                             <form action={cancelBooking}>
@@ -284,7 +286,7 @@ export default async function DashboardPage({
                 </div>
                 <div className="flex items-center gap-3">
                   <span className={`rounded-full px-3 py-1 text-xs font-semibold ring-1 ${statusStyles[b.status] ?? statusStyles.CANCELLED}`}>
-                    {b.status}
+                    {statusLabel(b.status)}
                   </span>
                   {b.status === "CONFIRMED" && (
                     <form action={cancelBooking}>
@@ -326,7 +328,7 @@ export default async function DashboardPage({
                   <span
                     className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 ${statusStyles[b.status] ?? statusStyles.CANCELLED}`}
                   >
-                    {b.status}
+                    {statusLabel(b.status)}
                   </span>
                 </span>
               </li>

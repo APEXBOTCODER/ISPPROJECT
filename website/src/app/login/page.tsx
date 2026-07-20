@@ -1,16 +1,34 @@
 import Link from "next/link";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { AuthError } from "next-auth";
 import { auth, signIn } from "@/lib/auth";
 import { config } from "@/lib/config";
+import { rateLimit } from "@/lib/rateLimit";
 
 export const metadata = { title: "Log in" };
 
+async function clientIp(): Promise<string> {
+  const h = await headers();
+  return h.get("x-forwarded-for")?.split(",")[0]?.trim() || h.get("x-real-ip") || "unknown";
+}
+
 async function loginAction(formData: FormData) {
   "use server";
+  const email = String(formData.get("email") ?? "").toLowerCase();
+  const ip = await clientIp();
+
+  // Throttle: 5 attempts / 15 min per email+IP, and 30 / 15 min per IP overall.
+  const perAccount = rateLimit(`login:${ip}:${email}`, 5, 15 * 60_000);
+  const perIp = rateLimit(`login:${ip}`, 30, 15 * 60_000);
+  if (!perAccount.ok || !perIp.ok) {
+    const mins = Math.ceil(Math.max(perAccount.retryAfterSec, perIp.retryAfterSec) / 60);
+    redirect(`/login?rate=${mins}`);
+  }
+
   try {
     await signIn("credentials", {
-      email: String(formData.get("email") ?? "").toLowerCase(),
+      email,
       password: String(formData.get("password") ?? ""),
       redirectTo: "/dashboard",
     });
@@ -30,11 +48,11 @@ async function googleAction() {
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; timeout?: string }>;
+  searchParams: Promise<{ error?: string; timeout?: string; rate?: string }>;
 }) {
   const session = await auth();
   if (session?.user) redirect("/dashboard");
-  const { error, timeout } = await searchParams;
+  const { error, timeout, rate } = await searchParams;
 
   return (
     <div className="mx-auto max-w-md px-4 py-16">
@@ -43,6 +61,11 @@ export default async function LoginPage({
         Book fields, manage reservations, and view your receipts.
       </p>
 
+      {rate && (
+        <p className="mt-4 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-red-200">
+          Too many login attempts. Please wait about {rate} minute{rate === "1" ? "" : "s"} and try again.
+        </p>
+      )}
       {timeout && !error && (
         <p className="mt-4 rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800 ring-1 ring-amber-200">
           You were signed out after 30 minutes of inactivity. Please log in again.

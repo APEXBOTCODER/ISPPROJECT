@@ -73,7 +73,6 @@ export default async function BookPage({
           maxAdvanceDays={policy.advanceBookingDays}
           maxHoursPerSegment={policy.maxHoursPerSegment}
           maxSegmentsPerReservation={policy.maxSegmentsPerReservation}
-          isMockPayments={config.paymentsProvider === "mock"}
         />
       </div>
     </div>

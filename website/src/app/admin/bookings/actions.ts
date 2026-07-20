@@ -238,6 +238,79 @@ export async function rescheduleBooking(formData: FormData) {
   redirect(`/admin/bookings?ok=${encodeURIComponent("Booking rescheduled.")}`);
 }
 
+type Confirmable = {
+  id: string;
+  code: string | null;
+  label: string | null;
+  totalCents: number;
+  user: { name: string; email: string };
+  bookings: { date: string; startHour: number; endHour: number; totalCents: number; resource: { name: string } }[];
+};
+
+async function emailReservationConfirmed(r: Confirmable) {
+  await sendEmail({
+    to: r.user.email,
+    subject: `Payment received — reservation ${r.code ?? ""} confirmed`,
+    text: [
+      `Hi ${r.user.name},`,
+      ``,
+      `Good news — we've received your payment and your reservation is CONFIRMED.`,
+      `Reservation ID: ${r.code ?? r.id}`,
+      ...(r.label ? [`Organization: ${r.label}`] : []),
+      ``,
+      ...r.bookings.map(
+        (b) => `  • ${b.resource.name} — ${b.date}, ${b.startHour}:00–${b.endHour}:00 (US Central) — ${formatCents(b.totalCents)}`
+      ),
+      ``,
+      `  Total: ${formatCents(r.totalCents)}`,
+      ``,
+      `See you on the field!`,
+      `Infinity Sports Park — ${config.tagline}`,
+    ].join("\n"),
+  });
+}
+
+async function confirmOne(r: Confirmable) {
+  const ref = `ZELLE-${r.code ?? r.id}`;
+  await prisma.$transaction([
+    prisma.reservation.update({ where: { id: r.id }, data: { status: "CONFIRMED", paymentRef: ref } }),
+    prisma.booking.updateMany({ where: { reservationId: r.id }, data: { status: "CONFIRMED", paymentRef: ref } }),
+  ]);
+  await emailReservationConfirmed(r);
+}
+
+const confirmInclude = { user: true, bookings: { include: { resource: true } } } as const;
+
+/** Confirm a single reservation's payment (staff verified Zelle receipt). */
+export async function confirmReservationPayment(formData: FormData) {
+  await requireStaff();
+  const id = String(formData.get("reservationId") ?? "");
+  const returnTo = "/admin/bookings";
+  const r = await prisma.reservation.findUnique({ where: { id }, include: confirmInclude });
+  if (!r) fail(returnTo, "Reservation not found.");
+  if (r.status !== "PENDING_PAYMENT") {
+    redirect(returnTo + "?ok=" + encodeURIComponent("That reservation is already handled."));
+  }
+  await confirmOne(r);
+  redirect(returnTo + "?ok=" + encodeURIComponent(`Confirmed ${r.code ?? ""} for ${r.user.name}.`));
+}
+
+/** Confirm ALL of a user's pending-payment reservations at once. */
+export async function confirmAllForUser(formData: FormData) {
+  await requireStaff();
+  const userId = String(formData.get("userId") ?? "");
+  const returnTo = "/admin/bookings";
+  if (!userId) redirect(returnTo);
+  const pending = await prisma.reservation.findMany({
+    where: { userId, kind: "BOOKING", status: "PENDING_PAYMENT" },
+    include: confirmInclude,
+  });
+  for (const r of pending) await confirmOne(r);
+  redirect(
+    returnTo + "?ok=" + encodeURIComponent(`Confirmed ${pending.length} reservation(s) for ${pending[0]?.user.name ?? "user"}.`)
+  );
+}
+
 /** Toggle the no-show flag on a booking. */
 export async function toggleNoShow(formData: FormData) {
   await requireStaff();
