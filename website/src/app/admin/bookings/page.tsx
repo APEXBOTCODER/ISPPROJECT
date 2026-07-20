@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { requireStaff } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
-import { parkNow } from "@/lib/availability";
+import { parkNow, releaseExpiredUnpaid } from "@/lib/availability";
 import RefundWorkbench, {
   type WorkbenchReservation,
   type WorkbenchStandalone,
@@ -25,6 +25,7 @@ export default async function AdminBookingsPage({
   const filter: Filter =
     filterParam === "upcoming" || filterParam === "past" ? filterParam : "all";
   const now = parkNow();
+  await releaseExpiredUnpaid();
 
   const [reservationRows, standaloneRows, pendingRows] = await Promise.all([
     prisma.reservation.findMany({

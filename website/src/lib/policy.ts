@@ -12,6 +12,7 @@ export type BookingPolicy = {
   maxSegmentsPerReservation: number;
   fullRefundHours: number;
   halfRefundHours: number;
+  unpaidExpiryHours: number;
 };
 
 export const POLICY_DEFAULTS: BookingPolicy = {
@@ -21,6 +22,7 @@ export const POLICY_DEFAULTS: BookingPolicy = {
   maxSegmentsPerReservation: config.maxSegmentsPerReservation,
   fullRefundHours: config.cancellationPolicy.fullRefundHours,
   halfRefundHours: config.cancellationPolicy.halfRefundHours,
+  unpaidExpiryHours: 72,
 };
 
 export const POLICY_FIELDS: {
@@ -36,6 +38,7 @@ export const POLICY_FIELDS: {
   { key: "maxSegmentsPerReservation", label: "Max days per reservation", help: "How many day-segments one reservation can contain.", min: 1, max: 90 },
   { key: "fullRefundHours", label: "Full-refund window (hours)", help: "Cancel this many hours ahead for a 100% refund.", min: 1, max: 336 },
   { key: "halfRefundHours", label: "Half-refund window (hours)", help: "Cancel this many hours ahead for a 50% refund.", min: 1, max: 336 },
+  { key: "unpaidExpiryHours", label: "Unpaid reservation auto-expire (hours)", help: "Release an unpaid (Zelle-pending) reservation's slots if payment isn't confirmed within this many hours.", min: 1, max: 720 },
 ];
 
 /** Effective policy = code defaults with any admin overrides layered on. */
