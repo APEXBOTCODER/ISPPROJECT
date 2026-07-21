@@ -71,6 +71,8 @@ model Reservation {
   paymentRef    String?
   status        String   @default("CONFIRMED") // PENDING | CONFIRMED | CANCELLED
   notes         String?
+  discountCode  String? // discount code applied at booking (uppercase), if any
+  discountCents Int      @default(0) // total discount given on this reservation
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -78,6 +80,18 @@ model Reservation {
   bookings Booking[]
 
   @@index([userId])
+}
+
+model DiscountCode {
+  id          String   @id @default(cuid())
+  code        String   @unique // uppercase, e.g. ACCPLAYER
+  description String? // e.g. "Argyle Cricket Club players"
+  kind        String   @default("PER_RESERVATION") // PER_HOUR | PER_RESERVATION
+  amountCents Int // discount amount (per hour, or flat per reservation)
+  active      Boolean  @default(true)
+  oncePerUser Boolean  @default(false) // e.g. NEWUSER — redeemable once per account
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
 
 // Short-lived 6-digit codes for email/phone ownership verification.

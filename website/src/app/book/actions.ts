@@ -14,6 +14,7 @@ import { getBookingPolicy } from "@/lib/policy";
 import { minHoursForDate, MIN_DURATION_MESSAGE } from "@/lib/bookingRules";
 import { getSettings } from "@/lib/settings";
 import { makeReservationCode } from "@/lib/reservationCode";
+import { findActiveCode, alreadyRedeemed, discountForHours } from "@/lib/discounts";
 
 async function uniqueReservationCode(): Promise<string> {
   for (let i = 0; i < 8; i++) {
@@ -154,6 +155,33 @@ export async function createReservation(formData: FormData) {
     });
   }
 
+  // Apply a discount code if one was entered (re-validated here, authoritative).
+  // The discount is allocated across the day-segments so each booking's stored
+  // total (and therefore revenue) reflects it and still sums to the amount due.
+  let discountCode: string | null = null;
+  let discountCents = 0;
+  const rawCode = String(formData.get("discountCode") ?? "").trim();
+  if (rawCode) {
+    const found = await findActiveCode(rawCode);
+    if (!found) bail("That discount code isn't valid.");
+    if (found.oncePerUser && (await alreadyRedeemed(userId, found.code))) {
+      bail("You've already used that discount code.");
+    }
+    const totalHours = prepared.reduce((s, p) => s + p.hours.length, 0);
+    const grandFull = prepared.reduce((s, p) => s + p.totalCents, 0);
+    discountCents = Math.min(discountForHours(found, totalHours), grandFull);
+    discountCode = found.code;
+    let remaining = discountCents;
+    prepared.forEach((p, i) => {
+      const share =
+        i === prepared.length - 1
+          ? remaining
+          : Math.min(remaining, Math.round((discountCents * p.totalCents) / grandFull));
+      p.totalCents = Math.max(0, p.totalCents - share);
+      remaining -= share;
+    });
+  }
+
   const grandTotal = prepared.reduce((sum, s) => sum + s.totalCents, 0);
   const segmentCount = prepared.length;
   const code = await uniqueReservationCode();
@@ -171,6 +199,8 @@ export async function createReservation(formData: FormData) {
           label: label ?? null,
           totalCents: grandTotal,
           status: "PENDING_PAYMENT",
+          discountCode,
+          discountCents,
         },
       });
       for (const seg of prepared) {
@@ -227,6 +257,7 @@ export async function createReservation(formData: FormData) {
         (s) => `  • ${s.resourceName} — ${s.date}, ${s.startHour}:00–${s.endHour}:00 (US Central) — ${formatCents(s.totalCents)}`
       ),
       ``,
+      ...(discountCents > 0 ? [`  Discount (${discountCode}): -${formatCents(discountCents)}`] : []),
       `  Amount due: ${formatCents(grandTotal)}`,
       ``,
       `HOW TO PAY (Zelle):`,

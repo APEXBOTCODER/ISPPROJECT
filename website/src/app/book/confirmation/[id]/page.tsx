@@ -81,6 +81,11 @@ export default async function ConfirmationPage({
           <span className="font-semibold text-navy">{confirmed ? "Total paid" : "Amount due"}</span>
           <span className="font-bold text-navy">{formatCents(reservation.totalCents)}</span>
         </div>
+        {reservation.discountCents > 0 && (
+          <p className="text-right text-xs font-semibold text-pitch-deep">
+            Includes {reservation.discountCode} discount −{formatCents(reservation.discountCents)}
+          </p>
+        )}
       </div>
 
       {pending && (

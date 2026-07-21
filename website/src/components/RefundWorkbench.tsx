@@ -13,6 +13,8 @@ export interface WorkbenchSegment {
   totalCents: number;
   refundedCents: number;
   noShow?: boolean;
+  paid?: boolean; // money was collected (has a payment ref)
+  policyRefundCents?: number; // suggested refund per the cancellation policy right now
 }
 
 export interface WorkbenchReservation {
@@ -42,8 +44,11 @@ function outstanding(s: WorkbenchSegment) {
   return Math.max(0, s.totalCents - s.refundedCents);
 }
 
-function refundable(s: WorkbenchSegment) {
-  return s.status === "CONFIRMED" && outstanding(s) >= 0;
+/** Refundable if money was collected and something is still outstanding —
+ *  whether it's still CONFIRMED or already CANCELLED (an admin can issue a
+ *  goodwill/policy refund even after a customer's inside-24h self-cancel). */
+function canRefund(s: WorkbenchSegment) {
+  return (s.paid ?? true) && outstanding(s) > 0 && (s.status === "CONFIRMED" || s.status === "CANCELLED");
 }
 
 export default function RefundWorkbench({
@@ -85,7 +90,7 @@ export default function RefundWorkbench({
   }
 
   function toggleReservation(r: WorkbenchReservation) {
-    const ids = r.segments.filter(refundable).map((s) => s.id);
+    const ids = r.segments.filter(canRefund).map((s) => s.id);
     setSelected((prev) => {
       const next = new Set(prev);
       const allOn = ids.every((id) => next.has(id));
@@ -125,7 +130,7 @@ export default function RefundWorkbench({
     reason.trim().length > 0 && selectedIds.length > 0 && !amountInvalid && !submitting;
 
   function SegmentRow({ s, owner }: { s: WorkbenchSegment; owner?: string }) {
-    const disabled = !refundable(s);
+    const disabled = !canRefund(s);
     return (
       <li className="flex flex-wrap items-center justify-between gap-2 py-1.5 text-sm">
         <label className="flex items-center gap-2">
@@ -154,7 +159,7 @@ export default function RefundWorkbench({
           <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 ${badge[s.status] ?? badge.CANCELLED}`}>
             {s.status}
           </span>
-          {noShowAction && refundable(s) && (
+          {noShowAction && s.status === "CONFIRMED" && (
             <>
               <Link
                 href={`/admin/bookings/${s.id}/reschedule`}
@@ -172,7 +177,7 @@ export default function RefundWorkbench({
               </form>
             </>
           )}
-          {refundable(s) && (
+          {canRefund(s) && (
             <button
               type="button"
               onClick={() => openFor([s.id])}
@@ -195,7 +200,7 @@ export default function RefundWorkbench({
       {/* Reservations */}
       <div className="space-y-4">
         {reservations.map((r) => {
-          const active = r.segments.filter(refundable);
+          const active = r.segments.filter(canRefund);
           const allOn = active.length > 0 && active.every((s) => selected.has(s.id));
           return (
             <div key={r.id} className="rounded-2xl border border-navy/10 p-5">
@@ -324,28 +329,47 @@ export default function RefundWorkbench({
               <input type="hidden" name="returnTo" value={returnTo} />
 
               {single ? (
-                <label className="block text-sm font-medium text-navy">
-                  Refund amount (max {money(outstanding(single))})
-                  <input
-                    name="customAmount"
-                    type="number"
-                    step="0.01"
-                    min={0}
-                    max={(outstanding(single) / 100).toFixed(2)}
-                    value={amountDollars}
-                    onChange={(e) => setAmountDollars(e.target.value)}
-                    placeholder={(outstanding(single) / 100).toFixed(2)}
-                    className="mt-1 w-full rounded-md border border-navy/20 px-3 py-2 text-sm focus:border-sky focus:outline-none focus:ring-2 focus:ring-sky/30"
-                  />
-                  <span className="mt-1 block text-xs text-navy/50">
-                    Leave blank to refund the full outstanding amount.
-                  </span>
-                  {amountInvalid && (
-                    <span className="mt-1 block text-xs text-red-600">
-                      Enter an amount between $0 and {money(outstanding(single))}.
+                <div>
+                  <label className="block text-sm font-medium text-navy">
+                    Refund amount (max {money(outstanding(single))})
+                    <input
+                      name="customAmount"
+                      type="number"
+                      step="0.01"
+                      min={0}
+                      max={(outstanding(single) / 100).toFixed(2)}
+                      value={amountDollars}
+                      onChange={(e) => setAmountDollars(e.target.value)}
+                      placeholder={(outstanding(single) / 100).toFixed(2)}
+                      className="mt-1 w-full rounded-md border border-navy/20 px-3 py-2 text-sm focus:border-sky focus:outline-none focus:ring-2 focus:ring-sky/30"
+                    />
+                    <span className="mt-1 block text-xs text-navy/50">
+                      Leave blank to refund the full outstanding amount.
                     </span>
-                  )}
-                </label>
+                    {amountInvalid && (
+                      <span className="mt-1 block text-xs text-red-600">
+                        Enter an amount between $0 and {money(outstanding(single))}.
+                      </span>
+                    )}
+                  </label>
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+                    <span className="text-navy/50">Quick fill:</span>
+                    <button type="button" onClick={() => setAmountDollars((outstanding(single) / 100).toFixed(2))}
+                      className="rounded border border-navy/20 px-2 py-0.5 font-semibold text-navy hover:bg-navy/5">
+                      Full {money(outstanding(single))}
+                    </button>
+                    {typeof single.policyRefundCents === "number" && (
+                      <button type="button" onClick={() => setAmountDollars((single.policyRefundCents! / 100).toFixed(2))}
+                        className="rounded border border-sky/40 bg-sky/5 px-2 py-0.5 font-semibold text-navy hover:bg-sky/10">
+                        Policy {money(single.policyRefundCents)}
+                      </button>
+                    )}
+                    <button type="button" onClick={() => setAmountDollars("0")}
+                      className="rounded border border-navy/20 px-2 py-0.5 font-semibold text-navy hover:bg-navy/5">
+                      $0
+                    </button>
+                  </div>
+                </div>
               ) : (
                 <p className="rounded-md bg-sky/5 px-3 py-2 text-xs text-navy/70 ring-1 ring-sky/15">
                   Each selected item is refunded its full outstanding amount ·

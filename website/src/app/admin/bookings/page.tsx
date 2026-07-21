@@ -7,6 +7,8 @@ import RefundWorkbench, {
   type WorkbenchStandalone,
 } from "@/components/RefundWorkbench";
 import { formatCents } from "@/lib/pricing";
+import { getBookingPolicy, refundPercentForPolicy } from "@/lib/policy";
+import { hoursUntilStart } from "@/lib/reservations";
 import { bulkRefund } from "@/app/admin/refunds/actions";
 import { toggleNoShow, confirmReservationPayment, confirmAllForUser, rejectReservationPayment } from "./actions";
 
@@ -65,6 +67,11 @@ export default async function AdminBookingsPage({
       .values()
   );
 
+  const policy = await getBookingPolicy();
+  // Refund the policy would give right now (guides the admin; they can override).
+  const policyRefund = (b: { date: string; startHour: number; totalCents: number; refundedCents: number }) =>
+    Math.round((Math.max(0, b.totalCents - b.refundedCents) * refundPercentForPolicy(hoursUntilStart(b.date, b.startHour), policy)) / 100);
+
   const maxDate = (dates: string[]) => (dates.length ? dates.slice().sort().at(-1)! : "");
   const inFilter = (d: string) =>
     filter === "all" || (filter === "upcoming" ? d >= now.date : d < now.date);
@@ -89,6 +96,8 @@ export default async function AdminBookingsPage({
         totalCents: b.totalCents,
         refundedCents: b.refundedCents,
         noShow: b.noShow,
+        paid: b.paymentRef != null,
+        policyRefundCents: policyRefund(b),
       })),
     }));
 
@@ -104,6 +113,8 @@ export default async function AdminBookingsPage({
       totalCents: b.totalCents,
       refundedCents: b.refundedCents,
       noShow: b.noShow,
+      paid: b.paymentRef != null,
+      policyRefundCents: policyRefund(b),
       userName: `${b.user.name} · ${b.user.email}`,
     }));
 

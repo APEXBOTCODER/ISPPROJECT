@@ -79,6 +79,10 @@ export default function BookingWizard({
   const [notice, setNotice] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [codeInput, setCodeInput] = useState("");
+  const [applied, setApplied] = useState<{ code: string; kind: string; amountCents: number; description: string } | null>(null);
+  const [codeMsg, setCodeMsg] = useState<string | null>(null);
+  const [applying, setApplying] = useState(false);
 
   const bounds = useMemo(() => hourBounds(selectedResources), [selectedResources]);
   const isTodaySelected = days.includes(parkNow.date);
@@ -238,6 +242,38 @@ export default function BookingWizard({
     [segments]
   );
   const grandTotal = segments.reduce((sum, s) => sum + s.subtotal, 0);
+  const totalHours = segments.reduce((sum, s) => sum + s.hours.length, 0);
+  const discountCents = applied
+    ? Math.min(applied.kind === "PER_HOUR" ? applied.amountCents * totalHours : applied.amountCents, grandTotal)
+    : 0;
+  const payable = Math.max(0, grandTotal - discountCents);
+
+  async function applyCode() {
+    const raw = codeInput.trim();
+    if (!raw) return;
+    setApplying(true);
+    setCodeMsg(null);
+    try {
+      const res = await fetch(`/api/discount/validate?code=${encodeURIComponent(raw)}`);
+      const data = await res.json();
+      if (data.ok) {
+        setApplied({ code: data.code, kind: data.kind, amountCents: data.amountCents, description: data.description });
+        setCodeMsg(null);
+      } else {
+        setApplied(null);
+        setCodeMsg(data.error ?? "That code isn't valid.");
+      }
+    } catch {
+      setCodeMsg("Couldn't check that code — try again.");
+    } finally {
+      setApplying(false);
+    }
+  }
+  function removeCode() {
+    setApplied(null);
+    setCodeInput("");
+    setCodeMsg(null);
+  }
 
   return (
     <div className="grid gap-8 lg:grid-cols-[1fr_340px]">
@@ -361,20 +397,65 @@ export default function BookingWizard({
                 </li>
               ))}
             </ul>
-            <div className="mt-4 flex justify-between border-t border-white/15 pt-3 text-base">
-              <span className="font-semibold">Total</span>
-              <span className="font-bold text-pitch">{money(grandTotal)}</span>
-            </div>
             <form action={createReservation} onSubmit={() => setSubmitting(true)} className="mt-4 space-y-3">
               <label className="block text-xs text-white/70">
                 Organization / entity (optional)
                 <input name="label" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Argyle Cricket Club"
                   className="mt-1 w-full rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm text-white placeholder:text-white/40 focus:border-pitch focus:outline-none" />
               </label>
+
+              {/* Discount code */}
+              <div className="text-xs text-white/70">
+                Discount code (optional)
+                {applied ? (
+                  <div className="mt-1 flex items-center justify-between rounded-md bg-pitch/20 px-3 py-2">
+                    <span className="text-sm font-semibold text-white">
+                      {applied.code} applied
+                      {applied.description ? <span className="block text-[11px] font-normal text-white/60">{applied.description}</span> : null}
+                    </span>
+                    <button type="button" onClick={removeCode} className="text-xs text-white/60 hover:text-white">✕ remove</button>
+                  </div>
+                ) : (
+                  <div className="mt-1 flex gap-2">
+                    <input
+                      value={codeInput}
+                      onChange={(e) => setCodeInput(e.target.value.toUpperCase())}
+                      placeholder="e.g. ACCPLAYER"
+                      className="w-full rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm uppercase text-white placeholder:text-white/40 focus:border-pitch focus:outline-none"
+                    />
+                    <button type="button" onClick={applyCode} disabled={applying || !codeInput.trim()}
+                      className="shrink-0 rounded-md border border-pitch bg-pitch/10 px-3 py-2 text-xs font-bold uppercase text-pitch disabled:opacity-40">
+                      {applying ? "…" : "Apply"}
+                    </button>
+                  </div>
+                )}
+                {codeMsg && <p className="mt-1 text-[11px] text-red-300">{codeMsg}</p>}
+              </div>
+
               <input type="hidden" name="segments" value={JSON.stringify(submitSegments)} />
+              <input type="hidden" name="discountCode" value={applied?.code ?? ""} />
+
+              {/* Totals */}
+              <div className="space-y-1 border-t border-white/15 pt-3 text-sm">
+                {discountCents > 0 && (
+                  <>
+                    <div className="flex justify-between text-white/70">
+                      <span>Subtotal</span><span>{money(grandTotal)}</span>
+                    </div>
+                    <div className="flex justify-between text-pitch">
+                      <span>Discount ({applied?.code})</span><span>−{money(discountCents)}</span>
+                    </div>
+                  </>
+                )}
+                <div className="flex justify-between text-base">
+                  <span className="font-semibold text-white">{discountCents > 0 ? "Amount due" : "Total"}</span>
+                  <span className="font-bold text-pitch">{money(payable)}</span>
+                </div>
+              </div>
+
               <button type="submit" disabled={submitting || submitSegments.length === 0}
                 className="btn-brand w-full rounded-md px-4 py-3 uppercase tracking-wide disabled:opacity-60">
-                {submitting ? "Reserving…" : `Reserve ${money(grandTotal)}`}
+                {submitting ? "Reserving…" : `Reserve ${money(payable)}`}
               </button>
             </form>
             <p className="mt-3 rounded-md bg-sky/20 px-3 py-2 text-xs text-white/90">
