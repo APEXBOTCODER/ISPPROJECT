@@ -58,6 +58,12 @@ jobs:
           command_timeout: 20m
           script: |
             set -e
+            # Load Node/npm/pm2 onto PATH — a non-interactive SSH shell skips the
+            # profile that nvm/nodesource rely on, so set it up explicitly.
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            export PATH="$HOME/.npm-global/bin:/usr/local/bin:/usr/bin:$PATH"
+            echo "Using node $(node -v) / npm $(npm -v) / pm2 $(pm2 -v)"
             cd ~/ISPPROJECT
             git fetch origin main
             git reset --hard ${{ github.sha }}
