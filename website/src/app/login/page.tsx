@@ -1,26 +1,23 @@
 import Link from "next/link";
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { AuthError } from "next-auth";
 import { auth, signIn } from "@/lib/auth";
 import { config } from "@/lib/config";
 import { rateLimit } from "@/lib/rateLimit";
+import { clientIp } from "@/lib/clientIp";
 
 export const metadata = { title: "Log in" };
-
-async function clientIp(): Promise<string> {
-  const h = await headers();
-  return h.get("x-forwarded-for")?.split(",")[0]?.trim() || h.get("x-real-ip") || "unknown";
-}
 
 async function loginAction(formData: FormData) {
   "use server";
   const email = String(formData.get("email") ?? "").toLowerCase();
   const ip = await clientIp();
 
-  // Throttle: 5 attempts / 15 min per email+IP, and 30 / 15 min per IP overall.
-  const perAccount = rateLimit(`login:${ip}:${email}`, 5, 15 * 60_000);
-  const perIp = rateLimit(`login:${ip}`, 30, 15 * 60_000);
+  // Throttle brute force. The per-ACCOUNT cap is keyed on the email ALONE so it
+  // can't be sidestepped by rotating (spoofable) source IPs; the per-IP cap is a
+  // secondary backstop against spraying many accounts from one host.
+  const perAccount = rateLimit(`login:acct:${email}`, 5, 15 * 60_000);
+  const perIp = rateLimit(`login:ip:${ip}`, 30, 15 * 60_000);
   if (!perAccount.ok || !perIp.ok) {
     const mins = Math.ceil(Math.max(perAccount.retryAfterSec, perIp.retryAfterSec) / 60);
     redirect(`/login?rate=${mins}`);

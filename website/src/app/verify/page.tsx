@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { config } from "@/lib/config";
+import { safeNext } from "@/lib/safeNext";
 import { resendCodeAction, submitCodeAction, updatePhoneAction } from "./actions";
 
 export const metadata = { title: "Verify your account" };
@@ -18,7 +19,8 @@ export default async function VerifyPage({
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
 
-  const { next = "/dashboard", error, ok } = await searchParams;
+  const { next: rawNext, error, ok } = await searchParams;
+  const next = safeNext(rawNext);
   const user = await prisma.user.findUnique({ where: { id: session.user.id } });
   if (!user) redirect("/login");
 

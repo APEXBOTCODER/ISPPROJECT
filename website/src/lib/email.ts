@@ -76,6 +76,16 @@ async function sendViaSes(input: EmailInput, from: string): Promise<void> {
 export async function sendEmail(input: EmailInput): Promise<void> {
   const from = process.env.EMAIL_FROM;
 
+  // Fail closed in production: the "console" provider prints the full message
+  // body — which includes verification codes and PII — to the server log. Never
+  // do that in prod; require a real provider (ses/resend) to be configured.
+  if (process.env.NODE_ENV === "production" && config.emailProvider === "console") {
+    console.error(
+      "[email] Refusing to log email in production — set EMAIL_PROVIDER=ses|resend. Message NOT sent."
+    );
+    return;
+  }
+
   if (config.emailProvider === "ses") {
     if (!from) {
       console.error("[email] EMAIL_FROM is not set — cannot send via SES. Logging instead.");

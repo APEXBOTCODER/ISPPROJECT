@@ -5,6 +5,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { config } from "@/lib/config";
 import { getCurrentWaiver, hasCurrentWaiver } from "@/lib/waiver";
+import { safeNext } from "@/lib/safeNext";
 import { buildSignedWaiverPdf, sha256Hex } from "@/lib/waiverPdf";
 import { countInitialMarkers } from "@/lib/waiverMarkers";
 import WaiverBodyInitials from "@/components/WaiverBodyInitials";
@@ -46,7 +47,7 @@ async function signWaiverAction(formData: FormData) {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
 
-  const next = String(formData.get("next") || "/dashboard");
+  const next = safeNext(formData.get("next"));
   const parsed = signSchema.safeParse({
     participantType: formData.get("participantType"),
     signedName: str(formData.get("signedName")),

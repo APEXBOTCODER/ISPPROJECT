@@ -38,6 +38,16 @@ async function sendViaSns(input: { to: string; body: string }): Promise<void> {
  * A send failure is logged, never thrown.
  */
 export async function sendSms(input: { to: string; body: string }): Promise<void> {
+  // Fail closed in production: the "console" provider prints the message body —
+  // which includes verification codes — to the server log. Require a real
+  // provider (sns) in prod.
+  if (process.env.NODE_ENV === "production" && config.smsProvider === "console") {
+    console.error(
+      "[sms] Refusing to log SMS in production — set SMS_PROVIDER=sns. Message NOT sent."
+    );
+    return;
+  }
+
   if (config.smsProvider === "sns") {
     try {
       await sendViaSns(input);

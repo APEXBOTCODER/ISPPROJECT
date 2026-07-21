@@ -1,6 +1,7 @@
 // Seed data: resources, pricing, waiver v1, demo admin + customer accounts.
 // Run with: npm run db:seed
 import "dotenv/config";
+import { randomBytes } from "crypto";
 import bcrypt from "bcryptjs";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
@@ -146,36 +147,60 @@ async function main() {
     },
   });
 
-  const adminPassword = "REDACTED";
-  await prisma.user.upsert({
-    where: { email: "admin@infinitysportspark.com" },
-    update: { role: "ADMIN" },
-    create: {
-      email: "admin@infinitysportspark.com",
-      name: "Park Admin",
-      role: "ADMIN",
-      passwordHash: await bcrypt.hash(adminPassword, 12),
-      emailVerified: new Date(),
-    },
-  });
+  // Admin credentials are NEVER hard-coded. Supply SEED_ADMIN_PASSWORD to set a
+  // known one; otherwise a strong random password is generated and printed once.
+  // In production, refuse to invent one silently — require it to be provided.
+  const isProd = process.env.NODE_ENV === "production";
+  const adminEmail = process.env.SEED_ADMIN_EMAIL ?? "admin@infinitysportspark.com";
+  const providedAdminPw = process.env.SEED_ADMIN_PASSWORD;
+  const adminPassword =
+    providedAdminPw ?? (isProd ? null : randomBytes(12).toString("base64url"));
 
-  const demoPassword = "REDACTED";
-  await prisma.user.upsert({
-    where: { email: "demo@example.com" },
-    update: {},
-    create: {
-      email: "demo@example.com",
-      name: "Demo Customer",
-      role: "CUSTOMER",
-      passwordHash: await bcrypt.hash(demoPassword, 12),
-      emailVerified: new Date(),
-    },
-  });
+  if (adminPassword) {
+    await prisma.user.upsert({
+      where: { email: adminEmail },
+      update: { role: "ADMIN" },
+      create: {
+        email: adminEmail,
+        name: "Park Admin",
+        role: "ADMIN",
+        passwordHash: await bcrypt.hash(adminPassword, 12),
+        emailVerified: new Date(),
+      },
+    });
+  } else {
+    console.warn(
+      "[seed] SEED_ADMIN_PASSWORD not set and NODE_ENV=production — skipped admin creation.\n" +
+        "       Create the admin explicitly or re-run with SEED_ADMIN_PASSWORD set."
+    );
+  }
+
+  // Demo customer only outside production (never ship a known login to prod).
+  const demoPassword = isProd ? null : randomBytes(12).toString("base64url");
+  if (demoPassword) {
+    await prisma.user.upsert({
+      where: { email: "demo@example.com" },
+      update: {},
+      create: {
+        email: "demo@example.com",
+        name: "Demo Customer",
+        role: "CUSTOMER",
+        passwordHash: await bcrypt.hash(demoPassword, 12),
+        emailVerified: new Date(),
+      },
+    });
+  }
 
   console.log("Seed complete.");
-  console.log("  Admin:    admin@infinitysportspark.com / " + adminPassword);
-  console.log("  Customer: demo@example.com / " + demoPassword);
-  console.log("  (Change both passwords before any shared/staging deployment.)");
+  if (adminPassword && !providedAdminPw) {
+    console.log(`  Admin:    ${adminEmail} / ${adminPassword}`);
+    console.log("  ^ Randomly generated — store it now; it is not shown again.");
+  } else if (adminPassword) {
+    console.log(`  Admin:    ${adminEmail} / (using SEED_ADMIN_PASSWORD)`);
+  }
+  if (demoPassword) {
+    console.log(`  Customer: demo@example.com / ${demoPassword}`);
+  }
 }
 
 main()
