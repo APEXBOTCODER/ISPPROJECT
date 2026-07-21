@@ -1,0 +1,83 @@
+name: Deploy to Lightsail
+
+# Builds the app on GitHub's runners (plenty of RAM) and ships the finished
+# .next to the 512 MB Lightsail box, which only has to run it — never build it.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}          # lets you trigger a deploy manually from the Actions tab
+
+concurrency:
+  group: production-deploy        # never run two deploys at once
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          # IMPORTANT: match your server's Node major version (run `node -v` there).
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install dependencies
+        working-directory: website
+        run: npm ci
+
+      - name: Build
+        working-directory: website
+        env:
+          SKIP_TYPECHECK: "true"
+        run: npm run build
+
+      - name: Package the build
+        working-directory: website
+        run: tar -czf /tmp/next-build.tar.gz .next
+
+      - name: Copy build to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          source: /tmp/next-build.tar.gz
+          target: /tmp
+
+      - name: Deploy on server
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          command_timeout: 20m
+          script: |
+            set -e
+            cd ~/ISPPROJECT
+            git fetch origin main
+            git reset --hard ${{ github.sha }}
+            cd website
+            # Reinstall deps ONLY when the lockfile changed (keeps deploys fast
+            # and avoids recompiling native modules on every push).
+            LOCK_HASH=$(sha256sum package-lock.json | cut -d' ' -f1)
+            if [ "$LOCK_HASH" != "$(cat .deploy-lock-hash 2>/dev/null || true)" ]; then
+              echo "Lockfile changed — installing dependencies"
+              npm install
+              echo "$LOCK_HASH" > .deploy-lock-hash
+            else
+              echo "Dependencies unchanged — skipping install"
+            fi
+            # Apply any new database migrations
+            npx prisma migrate deploy
+            # Swap in the freshly built .next from the runner
+            rm -rf .next
+            tar -xzf /tmp/next-build.tar.gz -C .
+            rm -f /tmp/next-build.tar.gz
+            # Restart (or first-time start) the app
+            pm2 restart isp --update-env || pm2 start npm --name isp -- start
+            pm2 save
