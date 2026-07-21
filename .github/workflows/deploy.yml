@@ -45,7 +45,9 @@ jobs:
 
       - name: Package the build
         working-directory: website
-        run: tar -czf /tmp/next-build.tar.gz .next
+        # Write into the workspace root — Docker-based actions can only see
+        # /github/workspace, not the runner's /tmp.
+        run: tar -czf ../next-build.tar.gz .next
 
       - name: Copy build to server
         uses: appleboy/scp-action@v0.1.7
@@ -53,8 +55,9 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
-          source: /tmp/next-build.tar.gz
+          source: next-build.tar.gz
           target: /tmp
+          overwrite: true
 
       - name: Deploy on server
         uses: appleboy/ssh-action@v1.2.0
