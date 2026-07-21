@@ -24,7 +24,13 @@ export default async function AdminDashboardPage() {
   const [upcomingCount, revenue, refundAgg, userCount, activeBlocks, recentBookings, recentRefunds] =
     await Promise.all([
       prisma.booking.count({ where: { status: "CONFIRMED", date: { gte: now.date } } }),
-      prisma.booking.aggregate({ where: { status: "CONFIRMED" }, _sum: { totalCents: true } }),
+      // Revenue = money actually collected: confirmed bookings PLUS ones that were
+      // paid and later cancelled (a late cancellation with a partial/zero refund
+      // means we kept some/all of the money). Net = this minus refunds.
+      prisma.booking.aggregate({
+        where: { OR: [{ status: "CONFIRMED" }, { status: "CANCELLED", paymentRef: { not: null } }] },
+        _sum: { totalCents: true },
+      }),
       prisma.refundRecord.aggregate({ _sum: { amountCents: true } }),
       prisma.user.count(),
       prisma.booking.count({ where: { status: "BLOCKED", date: { gte: now.date } } }),
@@ -35,6 +41,7 @@ export default async function AdminDashboardPage() {
         take: 8,
       }),
       prisma.refundRecord.findMany({
+        where: { amountCents: { gt: 0 } }, // real refunds only; $0 cancellations aren't refunds
         include: { user: true, staff: true },
         orderBy: { createdAt: "desc" },
         take: 8,
@@ -60,7 +67,7 @@ export default async function AdminDashboardPage() {
 
       <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <Kpi value={String(upcomingCount)} label="Upcoming confirmed bookings" href="/admin/bookings?filter=upcoming" />
-        <Kpi value={formatCents(grossRevenue)} label="Confirmed revenue (all time)" href="/admin/reports" />
+        <Kpi value={formatCents(grossRevenue)} label="Revenue collected (all time)" href="/admin/reports" />
         <Kpi value={formatCents(totalRefunded)} label="Total refunded" href="/admin/refunds" />
         <Kpi value={String(userCount)} label="Registered users" href="/admin/users" />
         <Kpi value={String(activeBlocks)} label="Active maintenance blocks" href="/admin/maintenance" />

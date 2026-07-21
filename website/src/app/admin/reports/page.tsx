@@ -38,8 +38,13 @@ export default async function AdminReportsPage({
   const [resources, revenueAgg, bookingCount, cancelledCount, noShowCount, refundAgg, refundCount] =
     await Promise.all([
       prisma.resource.findMany({ where: { active: true }, orderBy: { sortOrder: "asc" } }),
+      // Revenue = money collected: confirmed + paid-then-cancelled (we kept the
+      // non-refunded portion). Net = this minus refunds.
       prisma.booking.aggregate({
-        where: { status: "CONFIRMED", date: { gte: from, lte: to } },
+        where: {
+          OR: [{ status: "CONFIRMED" }, { status: "CANCELLED", paymentRef: { not: null } }],
+          date: { gte: from, lte: to },
+        },
         _sum: { totalCents: true },
       }),
       prisma.booking.count({ where: { status: "CONFIRMED", date: { gte: from, lte: to } } }),
@@ -53,7 +58,7 @@ export default async function AdminReportsPage({
         where: { createdAt: { gte: rangeStart, lt: rangeEnd } },
         _sum: { amountCents: true },
       }),
-      prisma.refundRecord.count({ where: { createdAt: { gte: rangeStart, lt: rangeEnd } } }),
+      prisma.refundRecord.count({ where: { amountCents: { gt: 0 }, createdAt: { gte: rangeStart, lt: rangeEnd } } }),
     ]);
 
   const revenue = revenueAgg._sum.totalCents ?? 0;
@@ -69,7 +74,11 @@ export default async function AdminReportsPage({
       prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true, email: true } }),
       prisma.booking.groupBy({
         by: ["userId"],
-        where: { userId: { in: userIds }, status: "CONFIRMED", date: { gte: from, lte: to } },
+        where: {
+          userId: { in: userIds },
+          OR: [{ status: "CONFIRMED" }, { status: "CANCELLED", paymentRef: { not: null } }],
+          date: { gte: from, lte: to },
+        },
         _sum: { totalCents: true },
         _count: { _all: true },
       }),
@@ -124,7 +133,7 @@ export default async function AdminReportsPage({
       </div>
 
       <div className="mt-6 grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
-        {stat("Confirmed revenue", formatCents(revenue))}
+        {stat("Revenue collected", formatCents(revenue))}
         {stat(refundCount === 1 ? "Refunded (1 refund)" : `Refunded (${refundCount} refunds)`, formatCents(refunded))}
         {stat("Net", formatCents(revenue - refunded))}
         {stat("Bookings", String(bookingCount))}
