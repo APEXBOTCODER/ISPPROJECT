@@ -30,10 +30,17 @@ jobs:
         working-directory: website
         run: npm ci
 
+      - name: Generate Prisma client
+        working-directory: website
+        env:
+          DATABASE_URL: "file:./prisma/dev.db"
+        run: npx prisma generate
+
       - name: Build
         working-directory: website
         env:
           SKIP_TYPECHECK: "true"
+          DATABASE_URL: "file:./prisma/dev.db"
         run: npm run build
 
       - name: Package the build
@@ -78,7 +85,8 @@ jobs:
             else
               echo "Dependencies unchanged — skipping install"
             fi
-            # Apply any new database migrations
+            # Regenerate the Prisma client (it's gitignored) and apply migrations
+            npx prisma generate
             npx prisma migrate deploy
             # Swap in the freshly built .next from the runner
             rm -rf .next
