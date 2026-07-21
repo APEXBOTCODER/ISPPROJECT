@@ -6,7 +6,7 @@ import { z } from "zod";
 import { requireStaff } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { priceForHours, formatCents } from "@/lib/pricing";
-import { parkNow, slotKey, findSlotConflicts } from "@/lib/availability";
+import { parkNow, slotKey, findSlotConflicts, cancelUnpaidReservation } from "@/lib/availability";
 import { getBookingPolicy } from "@/lib/policy";
 import { sendEmail } from "@/lib/email";
 import { config } from "@/lib/config";
@@ -293,6 +293,41 @@ export async function confirmReservationPayment(formData: FormData) {
   }
   await confirmOne(r);
   redirect(returnTo + "?ok=" + encodeURIComponent(`Confirmed ${r.code ?? ""} for ${r.user.name}.`));
+}
+
+/** Reject/cancel a pending-payment reservation when no Zelle was received.
+ *  Frees the slots and emails the customer. */
+export async function rejectReservationPayment(formData: FormData) {
+  await requireStaff();
+  const id = String(formData.get("reservationId") ?? "");
+  const returnTo = "/admin/bookings";
+  const existing = await prisma.reservation.findUnique({ where: { id }, select: { status: true } });
+  if (!existing) fail(returnTo, "Reservation not found.");
+  if (existing.status !== "PENDING_PAYMENT") {
+    redirect(returnTo + "?ok=" + encodeURIComponent("That reservation is already handled."));
+  }
+  const result = await cancelUnpaidReservation(id, "Cancelled by staff — payment not received");
+  if (!result.ok) {
+    redirect(returnTo + "?ok=" + encodeURIComponent("That reservation is already handled."));
+  }
+  const r = result.reservation;
+  await sendEmail({
+    to: r.user.email,
+    subject: `Reservation ${r.code ?? ""} cancelled — payment not received`,
+    text: [
+      `Hi ${r.user.name},`,
+      ``,
+      `Your reservation ${r.code ?? ""} has been cancelled because we didn't receive the Zelle payment, so the slots have been released.`,
+      ...(r.label ? [`Organization: ${r.label}`] : []),
+      ``,
+      ...r.bookings.map((b) => `  • ${b.resource.name} — ${b.date}, ${b.startHour}:00–${b.endHour}:00 — ${formatCents(b.totalCents)}`),
+      ``,
+      `Already paid, or want these times back? Reply to this email or book again: ${config.siteUrl}/book`,
+      ``,
+      `Infinity Sports Park — ${config.tagline}`,
+    ].join("\n"),
+  });
+  redirect(returnTo + "?ok=" + encodeURIComponent(`Cancelled ${r.code ?? ""} for ${r.user.name}.`));
 }
 
 /** Confirm ALL of a user's pending-payment reservations at once. */

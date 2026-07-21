@@ -8,7 +8,7 @@ import RefundWorkbench, {
 } from "@/components/RefundWorkbench";
 import { formatCents } from "@/lib/pricing";
 import { bulkRefund } from "@/app/admin/refunds/actions";
-import { toggleNoShow, confirmReservationPayment, confirmAllForUser } from "./actions";
+import { toggleNoShow, confirmReservationPayment, confirmAllForUser, rejectReservationPayment } from "./actions";
 
 export const metadata = { title: "Admin · Bookings & refunds" };
 export const dynamic = "force-dynamic";
@@ -185,12 +185,20 @@ export default async function AdminBookingsPage({
                           {r.bookings.map((b) => `${b.resource.name} ${b.date} ${b.startHour}:00–${b.endHour}:00`).join(" · ")}
                         </span>
                       </span>
-                      <form action={confirmReservationPayment}>
-                        <input type="hidden" name="reservationId" value={r.id} />
-                        <button className="rounded-md bg-green-600 px-3 py-1.5 text-xs font-bold uppercase text-white hover:bg-green-700">
-                          Confirm payment
-                        </button>
-                      </form>
+                      <div className="flex items-center gap-2">
+                        <form action={confirmReservationPayment}>
+                          <input type="hidden" name="reservationId" value={r.id} />
+                          <button className="rounded-md bg-green-600 px-3 py-1.5 text-xs font-bold uppercase text-white hover:bg-green-700">
+                            Confirm payment
+                          </button>
+                        </form>
+                        <form action={rejectReservationPayment}>
+                          <input type="hidden" name="reservationId" value={r.id} />
+                          <button className="rounded-md border border-red-300 px-3 py-1.5 text-xs font-bold uppercase text-red-600 hover:bg-red-50">
+                            Reject
+                          </button>
+                        </form>
+                      </div>
                     </li>
                   ))}
                 </ul>

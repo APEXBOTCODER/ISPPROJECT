@@ -4,6 +4,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { formatCents } from "@/lib/pricing";
 import { getSettings } from "@/lib/settings";
+import { getBookingPolicy } from "@/lib/policy";
 
 export const metadata = { title: "Reservation received" };
 
@@ -16,7 +17,7 @@ export default async function ConfirmationPage({
   if (!session?.user?.id) redirect("/login");
 
   const { id } = await params;
-  const [reservation, settings] = await Promise.all([
+  const [reservation, settings, policy] = await Promise.all([
     prisma.reservation.findUnique({
       where: { id },
       include: {
@@ -24,8 +25,10 @@ export default async function ConfirmationPage({
       },
     }),
     getSettings(),
+    getBookingPolicy(),
   ]);
   if (!reservation || reservation.userId !== session.user.id) notFound();
+  const expiryLabel = policy.unpaidExpiryHours === 1 ? "1 hour" : `${policy.unpaidExpiryHours} hours`;
 
   const pending = reservation.status === "PENDING_PAYMENT";
   const confirmed = reservation.status === "CONFIRMED";
@@ -94,7 +97,7 @@ export default async function ConfirmationPage({
           <p className="mt-2 text-xs text-navy/70">
             Put your Reservation ID <strong>{reservation.code}</strong> in the Zelle memo so we can match your payment.
             Once we receive it, your reservation is confirmed and you&apos;ll get a confirmation email. We&apos;ve
-            emailed you these details too.
+            emailed you these details too. Unpaid requests are automatically cleared in {expiryLabel}.
           </p>
         </div>
       )}

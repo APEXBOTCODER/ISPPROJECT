@@ -6,6 +6,8 @@ import { prisma } from "@/lib/prisma";
 import { config } from "@/lib/config";
 import { sendEmail } from "@/lib/email";
 import { formatCents } from "@/lib/pricing";
+import { cancelUnpaidReservation } from "@/lib/availability";
+import { getSettings } from "@/lib/settings";
 import {
   hoursUntilStart,
   refundBookingAdvanced,
@@ -100,6 +102,61 @@ export async function cancelReservation(formData: FormData) {
       `Book again any time: ${config.siteUrl}/book`,
     ].join("\n"),
   });
+
+  redirect("/dashboard?cancelled=1");
+}
+
+/** Customer cancels their own unpaid (PENDING_PAYMENT) reservation. No refund —
+ *  nothing was paid — the slots are simply released. */
+export async function cancelPendingReservation(formData: FormData) {
+  const session = await auth();
+  if (!session?.user?.id) redirect("/login");
+
+  const reservationId = String(formData.get("reservationId") ?? "");
+  const reservation = await prisma.reservation.findUnique({
+    where: { id: reservationId },
+    select: { userId: true, status: true },
+  });
+  if (!reservation || reservation.userId !== session.user.id) {
+    redirect("/dashboard?error=" + encodeURIComponent("Reservation not found."));
+  }
+  if (reservation.status !== "PENDING_PAYMENT") {
+    redirect("/dashboard?error=" + encodeURIComponent("This reservation can no longer be cancelled here."));
+  }
+
+  const result = await cancelUnpaidReservation(reservationId, "Cancelled by customer before payment");
+  if (!result.ok) {
+    redirect("/dashboard?error=" + encodeURIComponent("This reservation was already updated."));
+  }
+  const r = result.reservation;
+
+  // Confirm to the customer, and let the admin know to stop expecting the Zelle payment.
+  await sendEmail({
+    to: r.user.email,
+    subject: `Reservation ${r.code ?? ""} cancelled`,
+    text: [
+      `Hi ${r.user.name},`,
+      ``,
+      `Your unpaid reservation ${r.code ?? ""} has been cancelled and the slots released. No payment was taken.`,
+      ``,
+      `Changed your mind? Book again any time: ${config.siteUrl}/book`,
+    ].join("\n"),
+  });
+  const settings = await getSettings();
+  const adminEmail = settings["notify.adminEmail"];
+  if (adminEmail) {
+    await sendEmail({
+      to: adminEmail,
+      subject: `Booking request ${r.code ?? ""} cancelled by customer — do not expect payment`,
+      text: [
+        `${r.user.name} (${r.user.email}) cancelled their unpaid reservation ${r.code ?? ""} before paying.`,
+        ...(r.label ? [`Organization: ${r.label}`] : []),
+        ...r.bookings.map((b) => `  • ${b.resource.name} — ${b.date}, ${b.startHour}:00–${b.endHour}:00 — ${formatCents(b.totalCents)}`),
+        ``,
+        `The slots have been released. No action needed.`,
+      ].join("\n"),
+    });
+  }
 
   redirect("/dashboard?cancelled=1");
 }

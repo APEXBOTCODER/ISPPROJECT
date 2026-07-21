@@ -47,10 +47,58 @@ export async function releaseExpiredHolds(): Promise<void> {
   });
 }
 
+export type CancelledUnpaid = {
+  id: string;
+  code: string | null;
+  label: string | null;
+  totalCents: number;
+  user: { name: string; email: string };
+  bookings: { date: string; startHour: number; endHour: number; totalCents: number; resource: { name: string } }[];
+};
+
+/**
+ * Cancel a single unpaid (PENDING_PAYMENT) reservation and free its slots.
+ * Race-safe: the conditional updateMany means only ONE caller (a sweep, the
+ * customer, or an admin) actually flips it, so nobody double-cancels or
+ * double-emails. Returns the reservation details for the caller to email, or
+ * ok:false if it was already handled / isn't pending.
+ */
+export async function cancelUnpaidReservation(
+  reservationId: string,
+  note: string
+): Promise<{ ok: false } | { ok: true; reservation: CancelledUnpaid }> {
+  const claim = await prisma.reservation.updateMany({
+    where: { id: reservationId, status: "PENDING_PAYMENT" },
+    data: { status: "CANCELLED", notes: note },
+  });
+  if (claim.count === 0) return { ok: false };
+
+  await prisma.booking.updateMany({
+    where: { reservationId },
+    data: { status: "CANCELLED", notes: note },
+  });
+  await prisma.bookingSlot.deleteMany({ where: { booking: { reservationId } } });
+
+  const reservation = await prisma.reservation.findUnique({
+    where: { id: reservationId },
+    select: {
+      id: true,
+      code: true,
+      label: true,
+      totalCents: true,
+      user: { select: { name: true, email: true } },
+      bookings: {
+        select: { date: true, startHour: true, endHour: true, totalCents: true, resource: { select: { name: true } } },
+        orderBy: [{ date: "asc" }, { startHour: "asc" }],
+      },
+    },
+  });
+  return { ok: true, reservation: reservation as CancelledUnpaid };
+}
+
 /**
  * Auto-expire unpaid (Zelle-pending) reservations older than the policy window,
- * freeing their slots. Race-safe: only the caller that flips a reservation to
- * CANCELLED emails the customer, so concurrent sweeps don't double-notify.
+ * freeing their slots and emailing the customer.
  */
 export async function releaseExpiredUnpaid(): Promise<void> {
   const { getBookingPolicy } = await import("@/lib/policy");
@@ -60,33 +108,19 @@ export async function releaseExpiredUnpaid(): Promise<void> {
   const cutoff = new Date(Date.now() - unpaidExpiryHours * 3_600_000);
   const expired = await prisma.reservation.findMany({
     where: { kind: "BOOKING", status: "PENDING_PAYMENT", createdAt: { lt: cutoff } },
-    include: {
-      user: { select: { name: true, email: true } },
-      bookings: {
-        include: { resource: { select: { name: true } } },
-        orderBy: [{ date: "asc" }, { startHour: "asc" }],
-      },
-    },
+    select: { id: true },
     take: 100,
   });
   if (expired.length === 0) return;
 
   const { sendEmail } = await import("@/lib/email");
   const { formatCents } = await import("@/lib/pricing");
+  const hoursLabel = unpaidExpiryHours === 1 ? "1 hour" : `${unpaidExpiryHours} hours`;
 
-  for (const r of expired) {
-    // Claim atomically so parallel sweeps don't double-cancel / double-email.
-    const claim = await prisma.reservation.updateMany({
-      where: { id: r.id, status: "PENDING_PAYMENT" },
-      data: { status: "CANCELLED", notes: `Auto-expired — payment not received within ${unpaidExpiryHours}h` },
-    });
-    if (claim.count === 0) continue;
-
-    await prisma.booking.updateMany({
-      where: { reservationId: r.id },
-      data: { status: "CANCELLED", notes: "Auto-expired — unpaid" },
-    });
-    await prisma.bookingSlot.deleteMany({ where: { booking: { reservationId: r.id } } });
+  for (const { id } of expired) {
+    const result = await cancelUnpaidReservation(id, `Auto-expired — payment not received within ${unpaidExpiryHours}h`);
+    if (!result.ok) continue;
+    const r = result.reservation;
 
     await sendEmail({
       to: r.user.email,
@@ -94,7 +128,7 @@ export async function releaseExpiredUnpaid(): Promise<void> {
       text: [
         `Hi ${r.user.name},`,
         ``,
-        `Your held reservation ${r.code ?? ""} has expired — we didn't receive payment within ${unpaidExpiryHours} hours, so the slots have been released.`,
+        `Your held reservation ${r.code ?? ""} has expired — we didn't receive payment within ${hoursLabel}, so the slots have been released.`,
         ...(r.label ? [`Organization: ${r.label}`] : []),
         ``,
         ...r.bookings.map((b) => `  • ${b.resource.name} — ${b.date}, ${b.startHour}:00–${b.endHour}:00 — ${formatCents(b.totalCents)}`),

@@ -242,5 +242,30 @@ export async function createReservation(formData: FormData) {
     ].join("\n"),
   });
 
+  // Notify the admin inbox of the new booking request (so they can watch for the Zelle payment).
+  const adminEmail = settings["notify.adminEmail"];
+  if (adminEmail) {
+    await sendEmail({
+      to: adminEmail,
+      subject: `New booking request ${code} — ${formatCents(grandTotal)} (awaiting Zelle)`,
+      text: [
+        `New booking request awaiting Zelle payment.`,
+        ``,
+        `Customer: ${session.user.name ?? "—"} (${session.user.email ?? "—"})`,
+        `Reservation ID: ${code}`,
+        ...(label ? [`Organization: ${label}`] : []),
+        ``,
+        ...prepared.map(
+          (s) => `  • ${s.resourceName} — ${s.date}, ${s.startHour}:00–${s.endHour}:00 — ${formatCents(s.totalCents)}`
+        ),
+        ``,
+        `  Amount due: ${formatCents(grandTotal)}`,
+        `  Zelle memo to match: ${code}`,
+        ``,
+        `Confirm once payment arrives: ${config.siteUrl}/admin/bookings`,
+      ].join("\n"),
+    });
+  }
+
   redirect(`/book/confirmation/${reservationId}`);
 }

@@ -5,7 +5,8 @@ import { formatCents } from "@/lib/pricing";
 import { parkNow } from "@/lib/availability";
 import { getCurrentWaiver } from "@/lib/waiver";
 import { getBookingPolicy } from "@/lib/policy";
-import { cancelBooking, cancelReservation, logoutAction } from "./actions";
+import { getSettings } from "@/lib/settings";
+import { cancelBooking, cancelReservation, cancelPendingReservation, logoutAction } from "./actions";
 import { emailSignedWaiver } from "@/app/waiver/actions";
 
 export const metadata = { title: "My Account" };
@@ -28,10 +29,13 @@ export default async function DashboardPage({
   const { error, cancelled, waiverEmailed } = await searchParams;
   const now = parkNow();
 
-  const [bookings, signatures, currentWaiver, dbUser, policy] = await Promise.all([
+  const [bookings, signatures, currentWaiver, dbUser, policy, settings] = await Promise.all([
     prisma.booking.findMany({
       where: { userId: user.id, status: { not: "BLOCKED" } },
-      include: { resource: true },
+      include: {
+        resource: true,
+        reservation: { select: { id: true, code: true, status: true, totalCents: true } },
+      },
       orderBy: [{ date: "desc" }, { startHour: "desc" }],
       take: 50,
     }),
@@ -42,7 +46,9 @@ export default async function DashboardPage({
     getCurrentWaiver(),
     prisma.user.findUnique({ where: { id: user.id } }),
     getBookingPolicy(),
+    getSettings(),
   ]);
+  const expiryLabel = policy.unpaidExpiryHours === 1 ? "1 hour" : `${policy.unpaidExpiryHours} hours`;
 
   const upcoming = bookings.filter(
     (b) =>
@@ -224,6 +230,8 @@ export default async function DashboardPage({
             {Array.from(reservationGroups.entries()).map(([reservationId, group]) => {
               const multi = group.length > 1;
               const hasActive = group.some((b) => b.status === "CONFIRMED");
+              const isPending = group.some((b) => b.status === "PENDING_PAYMENT");
+              const reservation = group[0].reservation;
               return (
                 <div key={reservationId} className="rounded-xl border border-navy/10 p-4">
                   {multi && (
@@ -239,6 +247,34 @@ export default async function DashboardPage({
                           </button>
                         </form>
                       )}
+                    </div>
+                  )}
+                  {isPending && reservation && (
+                    <div className="mb-3 rounded-lg border-2 border-amber-300 bg-amber-50/60 p-4 text-sm">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-bold text-amber-900">
+                          Pending payment · Reservation ID{" "}
+                          <span className="rounded bg-navy px-2 py-0.5 font-mono text-white">{reservation.code}</span>
+                        </span>
+                        <form action={cancelPendingReservation}>
+                          <input type="hidden" name="reservationId" value={reservationId} />
+                          <button className="rounded-md border border-red-300 bg-white px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50">
+                            Cancel request
+                          </button>
+                        </form>
+                      </div>
+                      <p className="mt-2 text-navy/80">
+                        Pay <strong>{formatCents(reservation.totalCents)}</strong> by <strong>Zelle</strong>:
+                      </p>
+                      <div className="mt-1 rounded-lg bg-white p-3">
+                        <div className="flex justify-between"><span className="text-navy/60">Zelle email</span><span className="font-semibold text-navy">{settings["payment.zelleEmail"]}</span></div>
+                        <div className="flex justify-between"><span className="text-navy/60">Zelle name</span><span className="font-semibold text-navy">{settings["payment.zelleName"]}</span></div>
+                        <div className="flex justify-between"><span className="text-navy/60">Memo</span><span className="font-mono font-bold text-navy">{reservation.code}</span></div>
+                      </div>
+                      <p className="mt-2 text-xs text-navy/70">
+                        Put your Reservation ID <strong>{reservation.code}</strong> in the Zelle memo so we can match your payment.
+                        Unpaid requests are automatically cleared in {expiryLabel}.
+                      </p>
                     </div>
                   )}
                   <ul className="space-y-2">

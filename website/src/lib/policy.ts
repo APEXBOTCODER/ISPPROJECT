@@ -22,7 +22,7 @@ export const POLICY_DEFAULTS: BookingPolicy = {
   maxSegmentsPerReservation: config.maxSegmentsPerReservation,
   fullRefundHours: config.cancellationPolicy.fullRefundHours,
   halfRefundHours: config.cancellationPolicy.halfRefundHours,
-  unpaidExpiryHours: 72,
+  unpaidExpiryHours: 2,
 };
 
 export const POLICY_FIELDS: {
