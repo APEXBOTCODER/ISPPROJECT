@@ -108,6 +108,10 @@ export default function RefundWorkbench({
     0
   );
   const single = selectedIds.length === 1 ? segById.get(selectedIds[0]) : null;
+  // When every selected item is already cancelled, the slots are already free —
+  // so it's a money-only (goodwill/policy) refund, no "cancel & free" choice.
+  const allCancelled =
+    selectedIds.length > 0 && selectedIds.every((id) => segById.get(id)?.status === "CANCELLED");
 
   function openFor(ids: string[]) {
     setSelected(new Set(ids));
@@ -377,22 +381,28 @@ export default function RefundWorkbench({
                 </p>
               )}
 
-              <label className="flex items-start gap-2 text-sm text-navy">
-                <input
-                  type="checkbox"
-                  name="cancel"
-                  checked={cancel}
-                  onChange={(e) => setCancel(e.target.checked)}
-                  className="mt-0.5 h-4 w-4 rounded border-navy/30"
-                />
-                <span>
-                  Also cancel the booking(s) &amp; free the slot(s)
-                  <span className="block text-xs text-navy/50">
-                    Uncheck to refund money while keeping the booking. (Amount $0 +
-                    cancel = cancel with no refund.)
+              {allCancelled ? (
+                <p className="rounded-md bg-navy/[0.03] px-3 py-2 text-xs text-navy/60 ring-1 ring-navy/10">
+                  Already cancelled — the slot(s) are already free. This is a money-only refund.
+                </p>
+              ) : (
+                <label className="flex items-start gap-2 text-sm text-navy">
+                  <input
+                    type="checkbox"
+                    name="cancel"
+                    checked={cancel}
+                    onChange={(e) => setCancel(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 rounded border-navy/30"
+                  />
+                  <span>
+                    Also cancel the booking(s) &amp; free the slot(s)
+                    <span className="block text-xs text-navy/50">
+                      Uncheck to refund money while keeping the booking. (Amount $0 +
+                      cancel = cancel with no refund.)
+                    </span>
                   </span>
-                </span>
-              </label>
+                </label>
+              )}
 
               <label className="block text-sm font-medium text-navy">
                 Reason (required — internal, not emailed to the customer)
