@@ -8,6 +8,7 @@ import { prisma } from "@/lib/prisma";
 import { priceForHours, formatCents } from "@/lib/pricing";
 import { parkNow, slotKey, findSlotConflicts, cancelUnpaidReservation } from "@/lib/availability";
 import { getBookingPolicy } from "@/lib/policy";
+import { refundBookingAdvanced } from "@/lib/reservations";
 import { sendEmail } from "@/lib/email";
 import { config } from "@/lib/config";
 
@@ -181,17 +182,27 @@ function addDays(date: string, n: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-/** Move one booking (segment) to a new ground and/or date/start-hour, keeping
- *  the same duration and price. Atomic slot swap; only into a free slot. */
+/**
+ * Move/adjust one booking: new ground and/or date, and new start AND end hours
+ * (so hours can be reduced or extended). A same-length move keeps the price; a
+ * duration change reprices — a reduction refunds the difference, an extension
+ * raises the amount owed. Atomic slot swap; only into free slots.
+ */
 export async function rescheduleBooking(formData: FormData) {
-  await requireStaff();
+  const staff = await requireStaff();
   const id = String(formData.get("bookingId") ?? "");
   const returnTo = `/admin/bookings/${id}/reschedule`;
   const newDate = String(formData.get("date") ?? "");
   const newStart = Number(formData.get("startHour"));
+  const newEnd = Number(formData.get("endHour"));
 
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(newDate) || !Number.isInteger(newStart)) {
-    fail(returnTo, "Pick a valid date and start hour.");
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(newDate) ||
+    !Number.isInteger(newStart) ||
+    !Number.isInteger(newEnd) ||
+    newEnd <= newStart
+  ) {
+    fail(returnTo, "Pick a valid date and start/end hours (end after start).");
   }
 
   const booking = await prisma.booking.findUnique({ where: { id }, include: { resource: true, user: true } });
@@ -204,9 +215,6 @@ export async function rescheduleBooking(formData: FormData) {
       ? booking.resource
       : await prisma.resource.findUnique({ where: { id: newResourceId } });
   if (!target || !target.active) fail(returnTo, "The chosen ground isn't available.");
-
-  const duration = booking.endHour - booking.startHour;
-  const newEnd = newStart + duration;
 
   const now = parkNow();
   const policy = await getBookingPolicy();
@@ -221,7 +229,18 @@ export async function rescheduleBooking(formData: FormData) {
     fail(returnTo, `New time is outside ${target.name}'s booking window.`);
   }
 
-  const hours = Array.from({ length: duration }, (_, i) => newStart + i);
+  const hours = Array.from({ length: newEnd - newStart }, (_, i) => newStart + i);
+  const oldDuration = booking.endHour - booking.startHour;
+  const newDuration = newEnd - newStart;
+
+  // Reprice only when the duration changes (same-length move keeps the price).
+  const outstanding = Math.max(0, booking.totalCents - booking.refundedCents);
+  const newPrice = priceForHours(target, newDate, hours);
+  const repriced = newDuration !== oldDuration;
+  const refundAmount = repriced ? Math.max(0, outstanding - newPrice) : 0;
+  const additional = repriced ? Math.max(0, newPrice - outstanding) : 0;
+
+  // 1. Atomic slot swap + ground/date/hour update — only into free slots.
   try {
     await prisma.$transaction(async (tx) => {
       await tx.bookingSlot.deleteMany({ where: { bookingId: id } });
@@ -235,18 +254,53 @@ export async function rescheduleBooking(formData: FormData) {
     });
   } catch (error: unknown) {
     if ((error as { code?: string })?.code === "P2002") {
-      fail(returnTo, `That slot on ${target.name} is already taken.`);
+      fail(returnTo, `That slot on ${target.name} is already taken — nothing changed.`);
     }
     throw error;
   }
 
+  // 2. Money. Keep totalCents as the gross originally charged: a reduction adds
+  //    a refund record (net revenue stays correct); an extension raises the
+  //    gross (the extra is owed and collected offline).
+  if (refundAmount > 0) {
+    await refundBookingAdvanced(id, {
+      amountCents: refundAmount,
+      cancel: false,
+      reason: "Hours reduced on reschedule",
+      staffId: staff.id,
+    });
+  } else if (additional > 0) {
+    await prisma.$transaction([
+      prisma.booking.update({ where: { id }, data: { totalCents: booking.totalCents + additional } }),
+      ...(booking.reservationId
+        ? [prisma.reservation.update({ where: { id: booking.reservationId }, data: { totalCents: { increment: additional } } })]
+        : []),
+    ]);
+  }
+
+  // 3. Notify the customer.
   await sendEmail({
     to: booking.user.email,
     subject: `Booking rescheduled — ${target.name}`,
-    text: `Your booking has been moved to ${target.name}, ${newDate}, ${newStart}:00–${newEnd}:00 (US Central) by our staff.`,
+    text: [
+      `Hi ${booking.user.name},`,
+      ``,
+      `Your booking has been updated by our staff to:`,
+      `  ${target.name} — ${newDate}, ${newStart}:00–${newEnd}:00 (US Central) (${newDuration}h)`,
+      ...(refundAmount > 0 ? [``, `A refund of ${formatCents(refundAmount)} has been issued for the reduced time.`] : []),
+      ...(additional > 0 ? [``, `Additional amount due: ${formatCents(additional)} — we'll be in touch to collect it via Zelle.`] : []),
+      ``,
+      `Manage your bookings: ${config.siteUrl}/dashboard`,
+    ].join("\n"),
   });
 
-  redirect(`/admin/bookings?ok=${encodeURIComponent("Booking rescheduled.")}`);
+  const okMsg =
+    refundAmount > 0
+      ? `Rescheduled · refunded ${formatCents(refundAmount)}.`
+      : additional > 0
+      ? `Rescheduled · ${formatCents(additional)} additional due.`
+      : "Booking rescheduled.";
+  redirect(`/admin/bookings?ok=${encodeURIComponent(okMsg)}`);
 }
 
 /**

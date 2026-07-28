@@ -26,7 +26,7 @@ export default async function ReschedulePage({
     prisma.resource.findMany({
       where: { active: true },
       orderBy: { sortOrder: "asc" },
-      select: { id: true, name: true, openHour: true, closeHour: true },
+      select: { id: true, name: true, openHour: true, closeHour: true, baseRate: true, peakRate: true },
     }),
   ]);
   if (!booking) notFound();
@@ -72,6 +72,7 @@ export default async function ReschedulePage({
             date: booking.date,
             startHour: booking.startHour,
             endHour: booking.endHour,
+            outstandingCents: Math.max(0, booking.totalCents - booking.refundedCents),
           }}
           resources={resources}
           minDate={now.date}
