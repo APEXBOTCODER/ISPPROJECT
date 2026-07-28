@@ -41,6 +41,10 @@ jobs:
         env:
           SKIP_TYPECHECK: "true"
           DATABASE_URL: "file:./prisma/dev.db"
+          # Legal text has been attorney-reviewed — bake the static legal pages
+          # without the DRAFT banner. (Runtime pages/PDF also need LEGAL_REVIEWED
+          # set in the server .env.)
+          LEGAL_REVIEWED: "true"
         run: npm run build
 
       - name: Package the build
