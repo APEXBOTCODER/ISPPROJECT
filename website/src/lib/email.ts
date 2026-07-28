@@ -33,20 +33,22 @@ type EmailInput = {
 
 /**
  * Send via Amazon SES. Uses nodemailer to build a raw MIME message so
- * attachments (the sealed waiver PDF) are supported, then hands it to SES's
- * SendRawEmail. Credentials come from the standard AWS chain (env vars or the
- * instance's IAM role); region from AWS_REGION. See DEPLOYMENT.md §"All-AWS".
+ * attachments (the sealed waiver PDF) are supported, then hands it to SES v2's
+ * SendEmail. nodemailer 7 requires the v2 client (@aws-sdk/client-sesv2) — the
+ * legacy v1 client is rejected. Credentials come from the standard AWS chain
+ * (env vars, or on EC2 an instance role — NOTE Lightsail has no instance role,
+ * so set AWS_ACCESS_KEY_ID/SECRET there); region from AWS_REGION.
  */
 async function sendViaSes(input: EmailInput, from: string): Promise<void> {
-  const [{ SES, SendRawEmailCommand }, nodemailer] = await Promise.all([
-    import("@aws-sdk/client-ses"),
+  const [{ SESv2Client, SendEmailCommand }, nodemailer] = await Promise.all([
+    import("@aws-sdk/client-sesv2"),
     import("nodemailer"),
   ]);
-  const ses = new SES({ region: process.env.AWS_REGION });
+  const sesClient = new SESv2Client({ region: process.env.AWS_REGION });
   // nodemailer's TS types omit the SES transport from createTransport's
   // overloads, though it is fully supported at runtime.
   const transporter = nodemailer.default.createTransport({
-    SES: { ses, aws: { SendRawEmailCommand } },
+    SES: { sesClient, SendEmailCommand },
   } as unknown as Parameters<typeof nodemailer.default.createTransport>[0]);
   await transporter.sendMail({
     from,
