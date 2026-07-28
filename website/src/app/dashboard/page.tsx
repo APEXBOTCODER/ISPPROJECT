@@ -20,6 +20,19 @@ const statusStyles: Record<string, string> = {
 };
 const statusLabel = (s: string) => (s === "PENDING_PAYMENT" ? "Pending payment" : s);
 
+/** Net price the customer paid/kept (gross minus any refund), with a note when
+ *  part was refunded — e.g. after staff reduced the hours. */
+function priceWithRefund(b: { totalCents: number; refundedCents: number }) {
+  return (
+    <>
+      {formatCents(b.totalCents - b.refundedCents)}
+      {b.refundedCents > 0 && (
+        <span className="text-navy/50"> · refunded {formatCents(b.refundedCents)}</span>
+      )}
+    </>
+  );
+}
+
 export default async function DashboardPage({
   searchParams,
 }: {
@@ -284,7 +297,7 @@ export default async function DashboardPage({
                           <div className="font-bold text-navy">{b.resource.name}</div>
                           <div className="text-sm text-navy/60">
                             {b.date} · {b.startHour}:00–{b.endHour}:00 (US Central) ·{" "}
-                            {formatCents(b.totalCents)}
+                            {priceWithRefund(b)}
                           </div>
                         </div>
                         <div className="flex items-center gap-3">
@@ -317,7 +330,7 @@ export default async function DashboardPage({
                   <div className="font-bold text-navy">{b.resource.name}</div>
                   <div className="text-sm text-navy/60">
                     {b.date} · {b.startHour}:00–{b.endHour}:00 (US Central) ·{" "}
-                    {formatCents(b.totalCents)}
+                    {priceWithRefund(b)}
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
@@ -360,7 +373,7 @@ export default async function DashboardPage({
                   {b.resource.name} · {b.date} · {b.startHour}:00–{b.endHour}:00
                 </span>
                 <span className="flex items-center gap-3">
-                  <span className="text-navy/60">{formatCents(b.totalCents)}</span>
+                  <span className="text-navy/60">{priceWithRefund(b)}</span>
                   <span
                     className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 ${statusStyles[b.status] ?? statusStyles.CANCELLED}`}
                   >
