@@ -34,13 +34,11 @@ export default function AdminBookingForm({
   resources,
   action,
   maxAdvanceDays,
-  maxHoursPerSegment,
   maxSegmentsPerReservation,
 }: {
   resources: ResourceOption[];
   action: (formData: FormData) => Promise<void>;
   maxAdvanceDays: number;
-  maxHoursPerSegment: number;
   maxSegmentsPerReservation: number;
 }) {
   const [customer, setCustomer] = useState<FoundUser | null>(null);
@@ -60,6 +58,13 @@ export default function AdminBookingForm({
   const [notice, setNotice] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [rateInput, setRateInput] = useState("");
+  const rateCents = (() => {
+    const t = rateInput.trim();
+    if (!t) return null;
+    const n = Math.round(parseFloat(t) * 100);
+    return Number.isNaN(n) || n < 0 ? null : n;
+  })();
 
   const bounds = useMemo(() => hourBounds(selectedResources), [selectedResources]);
   useEffect(() => {
@@ -83,7 +88,6 @@ export default function AdminBookingForm({
     if (selectedResources.length === 0 || days.length === 0) return;
     if (!bounds) { setNotice("Selected grounds have no common open hours."); return; }
     if (toHour <= fromHour) { setNotice("Choose a valid hour range."); return; }
-    if (toHour - fromHour > maxHoursPerSegment) { setNotice(`Max ${maxHoursPerSegment} hours per day.`); return; }
 
     const hours = Array.from({ length: toHour - fromHour }, (_, i) => fromHour + i);
     const combos = selectedResources.flatMap((r) => days.map((date) => ({ r, date })));
@@ -121,7 +125,9 @@ export default function AdminBookingForm({
   }
 
   const submitSegments = useMemo(() => segments.map((s) => ({ resourceId: s.resourceId, date: s.date, hours: s.hours })), [segments]);
-  const grandTotal = segments.reduce((s, x) => s + x.subtotal, 0);
+  // Special rate (when set) overrides standard pricing for display; the server re-applies it.
+  const segSubtotal = (s: Segment) => (rateCents != null ? rateCents * s.hours.length : s.subtotal);
+  const grandTotal = segments.reduce((sum, s) => sum + segSubtotal(s), 0);
   const canSubmit = !!customer && submitSegments.length > 0 && !submitting;
   const hourOptions = (lo: number, hi: number) => Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
 
@@ -199,7 +205,7 @@ export default function AdminBookingForm({
                 <li key={`${s.resourceId}-${s.date}`} className="flex justify-between gap-2 rounded-lg bg-white/5 p-2">
                   <span>{s.resourceName}<span className="block text-white/60">{s.date} · {fmtHour(s.hours[0])}–{fmtHour(s.hours[s.hours.length - 1] + 1)}</span></span>
                   <span className="flex flex-col items-end">
-                    <span className="font-semibold text-pitch">{money(s.subtotal)}</span>
+                    <span className="font-semibold text-pitch">{money(segSubtotal(s))}</span>
                     <button type="button" onClick={() => setSegments((p) => p.filter((_, x) => x !== i))} className="text-xs text-white/50 hover:text-white">remove</button>
                   </span>
                 </li>
@@ -212,6 +218,23 @@ export default function AdminBookingForm({
             <form action={action} onSubmit={() => setSubmitting(true)} className="mt-4 space-y-2">
               <input type="hidden" name="customerId" value={customer?.id ?? ""} />
               <input type="hidden" name="segments" value={JSON.stringify(submitSegments)} />
+              <label className="block text-xs text-white/70">
+                Special rate per hour <span className="text-white/40">(optional — overrides standard pricing)</span>
+                <div className="mt-1 flex items-center gap-1">
+                  <span className="text-white/60">$</span>
+                  <input
+                    name="rate"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={rateInput}
+                    onChange={(e) => setRateInput(e.target.value)}
+                    placeholder="e.g. 40.00"
+                    className="w-full rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm text-white placeholder:text-white/40"
+                  />
+                  <span className="text-xs text-white/60">/hr</span>
+                </div>
+              </label>
               <input name="label" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Note / organization (optional)"
                 className="w-full rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm text-white placeholder:text-white/40" />
               <button type="submit" disabled={!canSubmit} className="btn-brand w-full rounded-md px-4 py-3 text-sm uppercase disabled:opacity-50">

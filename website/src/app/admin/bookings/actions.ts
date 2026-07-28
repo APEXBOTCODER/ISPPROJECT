@@ -52,6 +52,13 @@ export async function createAdminReservation(formData: FormData) {
   if (!parsed.success) fail(returnTo, "Add at least one day.");
   const segments = parsed.data;
 
+  // Optional special rate per hour (admin override). Blank → standard pricing.
+  const rateRaw = String(formData.get("rate") ?? "").trim();
+  const rateCents = rateRaw ? Math.round(parseFloat(rateRaw) * 100) : null;
+  if (rateRaw && (rateCents === null || Number.isNaN(rateCents) || rateCents < 0)) {
+    fail(returnTo, "Enter a valid rate per hour, or leave it blank for standard pricing.");
+  }
+
   const policy = await getBookingPolicy();
   const now = parkNow();
   const maxDate = new Date(`${now.date}T00:00:00`);
@@ -77,7 +84,7 @@ export async function createAdminReservation(formData: FormData) {
     if (!resource || !resource.active) fail(returnTo, "A selected facility is unavailable.");
     const hours = [...seg.hours].sort((a, b) => a - b);
     if (!isContiguous(hours)) fail(returnTo, "Each day must be consecutive hours.");
-    if (hours.length > policy.maxHoursPerSegment) fail(returnTo, `Max ${policy.maxHoursPerSegment} hours per day.`);
+    // No per-segment hour cap for admin bookings (staff can book any length).
     if (
       seg.date < now.date ||
       seg.date > maxDateStr ||
@@ -99,7 +106,7 @@ export async function createAdminReservation(formData: FormData) {
       hours,
       startHour: hours[0],
       endHour: hours[hours.length - 1] + 1,
-      totalCents: priceForHours(resource, seg.date, hours),
+      totalCents: rateCents != null ? rateCents * hours.length : priceForHours(resource, seg.date, hours),
     });
   }
 
@@ -233,12 +240,15 @@ export async function rescheduleBooking(formData: FormData) {
   const oldDuration = booking.endHour - booking.startHour;
   const newDuration = newEnd - newStart;
 
-  // Reprice only when the duration changes (same-length move keeps the price).
+  // Keep the SAME per-hour rate the booking already has (its outstanding value ÷
+  // current hours), so a reschedule/reduction is priced at the customer's
+  // original rate — not the ground's standard/peak rate. A same-length move
+  // therefore leaves the price unchanged.
   const outstanding = Math.max(0, booking.totalCents - booking.refundedCents);
-  const newPrice = priceForHours(target, newDate, hours);
-  const repriced = newDuration !== oldDuration;
-  const refundAmount = repriced ? Math.max(0, outstanding - newPrice) : 0;
-  const additional = repriced ? Math.max(0, newPrice - outstanding) : 0;
+  const perHourCents = oldDuration > 0 ? outstanding / oldDuration : 0;
+  const newPrice = Math.round(perHourCents * newDuration);
+  const refundAmount = Math.max(0, outstanding - newPrice);
+  const additional = Math.max(0, newPrice - outstanding);
 
   // 1. Atomic slot swap + ground/date/hour update — only into free slots.
   try {

@@ -43,7 +43,6 @@ export default async function AdminNewBookingPage({
           resources={resources}
           action={createAdminReservation}
           maxAdvanceDays={policy.advanceBookingDays}
-          maxHoursPerSegment={policy.maxHoursPerSegment}
           maxSegmentsPerReservation={policy.maxSegmentsPerReservation}
         />
       </div>

@@ -7,19 +7,10 @@ interface ResourceOpt {
   name: string;
   openHour: number;
   closeHour: number;
-  baseRate: number;
-  peakRate: number;
 }
 
 function money(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
-}
-function isWeekend(date: string) {
-  const d = new Date(`${date}T00:00:00`).getDay();
-  return d === 0 || d === 6;
-}
-function isPeak(date: string, hour: number) {
-  return isWeekend(date) || hour >= 17;
 }
 
 export default function RescheduleForm({
@@ -66,16 +57,13 @@ export default function RescheduleForm({
   }
 
   const newDuration = Math.max(0, endHour - startHour);
-  // Reprice only when the duration changes; a same-length move keeps the price.
-  const newPrice = useMemo(() => {
-    if (!resource) return 0;
-    let sum = 0;
-    for (let h = startHour; h < endHour; h++) sum += isPeak(date, h) ? resource.peakRate : resource.baseRate;
-    return sum;
-  }, [resource, date, startHour, endHour]);
-  const repriced = newDuration !== oldDuration;
-  const refund = repriced ? Math.max(0, booking.outstandingCents - newPrice) : 0;
-  const additional = repriced ? Math.max(0, newPrice - booking.outstandingCents) : 0;
+  // Keep the booking's existing per-hour rate (outstanding ÷ current hours), so
+  // reducing/extending is priced at the customer's original rate. A same-length
+  // move leaves the price unchanged.
+  const perHour = oldDuration > 0 ? booking.outstandingCents / oldDuration : 0;
+  const newPrice = Math.round(perHour * newDuration);
+  const refund = Math.max(0, booking.outstandingCents - newPrice);
+  const additional = Math.max(0, newPrice - booking.outstandingCents);
 
   const groundChanged = resourceId !== booking.resourceId;
 
@@ -122,29 +110,23 @@ export default function RescheduleForm({
           <span className="text-navy/60">New duration</span>
           <span className="font-semibold text-navy">{newDuration}h ({startHour}:00–{endHour}:00)</span>
         </div>
-        {repriced ? (
-          <>
-            <div className="flex justify-between">
-              <span className="text-navy/60">New price</span>
-              <span className="font-semibold text-navy">{money(newPrice)}</span>
-            </div>
-            {refund > 0 && (
-              <div className="flex justify-between text-green-700">
-                <span>Refund to customer</span>
-                <span className="font-bold">{money(refund)}</span>
-              </div>
-            )}
-            {additional > 0 && (
-              <div className="flex justify-between text-amber-700">
-                <span>Additional due (collect via Zelle)</span>
-                <span className="font-bold">{money(additional)}</span>
-              </div>
-            )}
-            {refund === 0 && additional === 0 && <div className="text-xs text-navy/50">No price change.</div>}
-          </>
-        ) : (
-          <div className="text-xs text-navy/50">Same length — price unchanged ({money(booking.outstandingCents)}).</div>
+        <div className="flex justify-between">
+          <span className="text-navy/60">New price (same rate)</span>
+          <span className="font-semibold text-navy">{money(newPrice)}</span>
+        </div>
+        {refund > 0 && (
+          <div className="flex justify-between text-green-700">
+            <span>Refund to customer</span>
+            <span className="font-bold">{money(refund)}</span>
+          </div>
         )}
+        {additional > 0 && (
+          <div className="flex justify-between text-amber-700">
+            <span>Additional due (collect via Zelle)</span>
+            <span className="font-bold">{money(additional)}</span>
+          </div>
+        )}
+        {refund === 0 && additional === 0 && <div className="text-xs text-navy/50">Price unchanged.</div>}
       </div>
 
       <button disabled={newDuration < 1} className="btn-brand rounded-md px-5 py-2 text-sm font-bold uppercase disabled:opacity-50">
