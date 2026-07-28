@@ -28,6 +28,7 @@ type EmailInput = {
   to: string;
   subject: string;
   text: string;
+  replyTo?: string;
   attachments?: EmailAttachment[];
 };
 
@@ -55,6 +56,7 @@ async function sendViaSes(input: EmailInput, from: string): Promise<void> {
     to: input.to,
     subject: input.subject,
     text: input.text,
+    replyTo: input.replyTo,
     attachments: input.attachments?.map((a) => ({
       filename: a.filename,
       content: Buffer.from(a.content),
@@ -122,6 +124,7 @@ export async function sendEmail(input: EmailInput): Promise<void> {
       to: input.to,
       subject: input.subject,
       text: input.text,
+      replyTo: input.replyTo,
       attachments: input.attachments?.map((a) => ({
         filename: a.filename,
         content: Buffer.from(a.content),
