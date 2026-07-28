@@ -7,6 +7,7 @@ import RefundWorkbench, {
   type WorkbenchStandalone,
 } from "@/components/RefundWorkbench";
 import { formatCents } from "@/lib/pricing";
+import BookingFilters from "@/components/BookingFilters";
 import { getBookingPolicy, refundPercentForPolicy } from "@/lib/policy";
 import { hoursUntilStart } from "@/lib/reservations";
 import { bulkRefund } from "@/app/admin/refunds/actions";
@@ -16,22 +17,44 @@ export const metadata = { title: "Admin · Bookings & refunds" };
 export const dynamic = "force-dynamic";
 
 type Filter = "all" | "upcoming" | "past";
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export default async function AdminBookingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; ok?: string; filter?: string }>;
+  searchParams: Promise<{
+    error?: string; ok?: string; filter?: string;
+    userId?: string; resourceId?: string; from?: string; to?: string;
+  }>;
 }) {
   await requireStaff();
-  const { error, ok, filter: filterParam } = await searchParams;
-  const filter: Filter =
-    filterParam === "upcoming" || filterParam === "past" ? filterParam : "all";
+  const sp = await searchParams;
+  const { error, ok } = sp;
+  const filter: Filter = sp.filter === "upcoming" || sp.filter === "past" ? sp.filter : "all";
+  const userId = sp.userId?.trim() || undefined;
+  const resourceId = sp.resourceId?.trim() || undefined;
+  const from = DATE_RE.test(sp.from ?? "") ? sp.from! : undefined;
+  const to = DATE_RE.test(sp.to ?? "") ? sp.to! : undefined;
+  const hasRange = Boolean(from && to);
   const now = parkNow();
   await releaseExpiredUnpaid();
 
-  const [reservationRows, standaloneRows, pendingRows] = await Promise.all([
+  // Segment-level filter (ground + date range) shared by both queries. Pushed
+  // into Prisma so filtering isn't limited by the 200-row cap.
+  const segWhere = {
+    ...(resourceId ? { resourceId } : {}),
+    ...(hasRange ? { date: { gte: from, lte: to } } : {}),
+  };
+  const hasSegFilter = Boolean(resourceId || hasRange);
+
+  const [reservationRows, standaloneRows, pendingRows, selectedUser] = await Promise.all([
     prisma.reservation.findMany({
-      where: { kind: "BOOKING", status: { not: "PENDING_PAYMENT" } },
+      where: {
+        kind: "BOOKING",
+        status: { not: "PENDING_PAYMENT" },
+        ...(userId ? { userId } : {}),
+        ...(hasSegFilter ? { bookings: { some: segWhere } } : {}),
+      },
       include: {
         user: true,
         bookings: { include: { resource: true }, orderBy: [{ date: "asc" }, { startHour: "asc" }] },
@@ -40,7 +63,7 @@ export default async function AdminBookingsPage({
       take: 200,
     }),
     prisma.booking.findMany({
-      where: { reservationId: null, status: { not: "BLOCKED" } },
+      where: { reservationId: null, status: { not: "BLOCKED" }, ...(userId ? { userId } : {}), ...segWhere },
       include: { user: true, resource: true },
       orderBy: [{ date: "desc" }, { startHour: "desc" }],
       take: 200,
@@ -53,6 +76,7 @@ export default async function AdminBookingsPage({
       },
       orderBy: { createdAt: "asc" },
     }),
+    userId ? prisma.user.findUnique({ where: { id: userId }, select: { name: true } }) : Promise.resolve(null),
   ]);
 
   // Group pending-payment reservations by user for the confirm-payment panel.
@@ -75,13 +99,16 @@ export default async function AdminBookingsPage({
   const policyRefund = (b: { date: string; startHour: number; totalCents: number; refundedCents: number }) =>
     Math.round((Math.max(0, b.totalCents - b.refundedCents) * refundPercentForPolicy(hoursUntilStart(b.date, b.startHour), policy)) / 100);
 
-  const maxDate = (dates: string[]) => (dates.length ? dates.slice().sort().at(-1)! : "");
   const inFilter = (d: string) =>
     filter === "all" || (filter === "upcoming" ? d >= now.date : d < now.date);
+  // Explicit date range (when set) overrides the quick all/upcoming/past filter.
+  const matchDate = (d: string) => (hasRange ? d >= from! && d <= to! : inFilter(d));
+  const matchGround = (rid: string) => !resourceId || rid === resourceId;
 
   const reservations: WorkbenchReservation[] = reservationRows
-    .filter((r) => inFilter(maxDate(r.bookings.map((b) => b.date))))
-    .map((r) => ({
+    .map((r) => ({ r, segs: r.bookings.filter((b) => matchGround(b.resourceId) && matchDate(b.date)) }))
+    .filter(({ segs }) => segs.length > 0)
+    .map(({ r, segs }) => ({
       id: r.id,
       label: r.label,
       userName: r.user.name,
@@ -89,7 +116,7 @@ export default async function AdminBookingsPage({
       status: r.status,
       totalCents: r.totalCents,
       refundedCents: r.refundedCents,
-      segments: r.bookings.map((b) => ({
+      segments: segs.map((b) => ({
         id: b.id,
         resourceName: b.resource.name,
         date: b.date,
@@ -105,7 +132,7 @@ export default async function AdminBookingsPage({
     }));
 
   const standalone: WorkbenchStandalone[] = standaloneRows
-    .filter((b) => inFilter(b.date))
+    .filter((b) => matchGround(b.resourceId) && matchDate(b.date))
     .map((b) => ({
       id: b.id,
       resourceName: b.resource.name,
@@ -121,16 +148,21 @@ export default async function AdminBookingsPage({
       userName: `${b.user.name} · ${b.user.email}`,
     }));
 
-  const filterLink = (f: Filter, label: string) => (
-    <Link
-      href={`/admin/bookings?filter=${f}`}
-      className={`rounded-full px-3 py-1 text-xs font-semibold ${
-        filter === f ? "gradient-brand text-white" : "bg-navy/5 text-navy hover:bg-navy/10"
-      }`}
-    >
-      {label}
-    </Link>
-  );
+  const filterLink = (f: Filter, label: string) => {
+    const p = new URLSearchParams({ filter: f });
+    if (userId) p.set("userId", userId);
+    if (resourceId) p.set("resourceId", resourceId);
+    return (
+      <Link
+        href={`/admin/bookings?${p.toString()}`}
+        className={`rounded-full px-3 py-1 text-xs font-semibold ${
+          filter === f && !hasRange ? "gradient-brand text-white" : "bg-navy/5 text-navy hover:bg-navy/10"
+        }`}
+      >
+        {label}
+      </Link>
+    );
+  };
 
   return (
     <div>
@@ -151,7 +183,19 @@ export default async function AdminBookingsPage({
         cancel-only all supported).
       </p>
 
+      <div className="mt-4">
+        <BookingFilters
+          resources={rescheduleResources}
+          userId={userId}
+          userName={selectedUser?.name}
+          resourceId={resourceId}
+          from={from}
+          to={to}
+        />
+      </div>
+
       <div className="mt-4 flex items-center gap-2">
+        <span className="text-xs font-semibold uppercase tracking-wide text-navy/40">Quick:</span>
         {filterLink("all", "All")}
         {filterLink("upcoming", "Upcoming")}
         {filterLink("past", "Past")}
