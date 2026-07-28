@@ -70,7 +70,7 @@ export default async function Footer() {
             <li><Link href="/legal/terms" className="hover:text-pitch">Terms of Service</Link></li>
             <li><Link href="/legal/privacy" className="hover:text-pitch">Privacy Policy</Link></li>
             <li><Link href="/legal/refunds" className="hover:text-pitch">Cancellation &amp; Refunds</Link></li>
-            <li><Link href="/legal/waiver" className="hover:text-pitch">Waiver &amp; Liability</Link></li>
+            <li><Link href="/waiver-public" className="hover:text-pitch">Waiver &amp; Liability</Link></li>
           </ul>
         </div>
       </div>

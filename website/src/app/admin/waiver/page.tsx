@@ -21,7 +21,7 @@ export default async function AdminWaiverPage({
   const isAdmin = staff.role === "ADMIN";
   const { ok, error } = await searchParams;
 
-  const [current, versions, signatures] = await Promise.all([
+  const [current, versions, signatures, publicSignatures] = await Promise.all([
     getCurrentWaiver(),
     prisma.waiverDocument.findMany({
       orderBy: { version: "desc" },
@@ -31,6 +31,14 @@ export default async function AdminWaiverPage({
       orderBy: { signedAt: "desc" },
       take: 100,
       include: { user: true },
+    }),
+    prisma.publicWaiverSignature.findMany({
+      orderBy: { signedAt: "desc" },
+      take: 100,
+      select: {
+        id: true, signedAt: true, participantName: true, signedName: true, signerEmail: true,
+        version: true, ipAddress: true, pdfSha256: true, downloadToken: true,
+      },
     }),
   ]);
 
@@ -205,6 +213,53 @@ export default async function AdminWaiverPage({
               </table>
             </div>
           </form>
+        )}
+      </section>
+
+      {/* Public waivers (signed without an account, via the footer link) */}
+      <section className="mt-8">
+        <h2 className="display text-2xl text-navy">Public waivers (no account)</h2>
+        <p className="mt-1 text-sm text-navy/60">
+          Signed via the public “Waiver &amp; Liability” link — no login required. Showing the{" "}
+          {publicSignatures.length} most recent.
+        </p>
+        {publicSignatures.length === 0 ? (
+          <p className="mt-3 text-sm text-navy/60">None yet.</p>
+        ) : (
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full min-w-[820px] text-left text-sm">
+              <thead>
+                <tr className="border-b border-navy/15 text-xs uppercase text-navy/50">
+                  <th className="py-2 pr-4">Signed</th>
+                  <th className="py-2 pr-4">Participant</th>
+                  <th className="py-2 pr-4">Signer</th>
+                  <th className="py-2 pr-4">Email</th>
+                  <th className="py-2 pr-4">Ver</th>
+                  <th className="py-2 pr-4">IP</th>
+                  <th className="py-2 pr-4">Hash</th>
+                  <th className="py-2">PDF</th>
+                </tr>
+              </thead>
+              <tbody>
+                {publicSignatures.map((s) => (
+                  <tr key={s.id} className="border-b border-navy/5">
+                    <td className="py-2 pr-4 whitespace-nowrap text-navy/60">{s.signedAt.toISOString().slice(0, 16).replace("T", " ")}</td>
+                    <td className="py-2 pr-4 font-medium text-navy">{s.participantName}</td>
+                    <td className="py-2 pr-4">{s.signedName}</td>
+                    <td className="py-2 pr-4 text-navy/60">{s.signerEmail}</td>
+                    <td className="py-2 pr-4">v{s.version}</td>
+                    <td className="py-2 pr-4 text-navy/60">{s.ipAddress}</td>
+                    <td className="py-2 pr-4 font-mono text-xs text-navy/50">{s.pdfSha256 ? s.pdfSha256.slice(0, 10) : "—"}</td>
+                    <td className="py-2">
+                      <a href={`/api/waiver/public/${s.id}?token=${encodeURIComponent(s.downloadToken)}`} className="font-semibold text-sky hover:underline">
+                        Download
+                      </a>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </section>
     </div>

@@ -232,7 +232,46 @@ model WaiverDocument {
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
 
-  signatures WaiverSignature[]
+  signatures       WaiverSignature[]
+  publicSignatures PublicWaiverSignature[]
+}
+
+/**
+ * Waiver signed by someone WITHOUT an account (public /waiver-public page). Kept
+ * in its own table so the account-linked WaiverSignature stays untouched. The
+ * sealed PDF is stored inline; download is gated by a random capability token.
+ */
+model PublicWaiverSignature {
+  id               String    @id @default(cuid())
+  documentId       String
+  version          Int
+  signerEmail      String
+  signedName       String
+  participantName  String
+  minorDob         String?
+  guardianRelation String?
+  ipAddress        String
+  userAgent        String?
+  initials         String?
+  participantType  String?
+  participantDob   String?
+  phone            String?
+  address          String?
+  emergencyName    String?
+  emergencyPhone   String?
+  allergies        String?
+  medical          String?
+  mediaRelease     Boolean   @default(true)
+  consentEsign     Boolean   @default(false)
+  pdfSha256        String?
+  pdfData          Bytes
+  downloadToken    String    @unique
+  emailedAt        DateTime?
+  signedAt         DateTime  @default(now())
+
+  document WaiverDocument @relation(fields: [documentId], references: [id])
+
+  @@index([signedAt])
 }
 
 // Append-only: signatures are never updated or deleted (legal audit trail).

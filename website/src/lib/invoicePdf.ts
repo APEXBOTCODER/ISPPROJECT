@@ -5,6 +5,7 @@ export interface InvoiceLine {
   startHour: number;
   endHour: number;
   totalCents: number;
+  refundedCents: number;
   resourceName: string;
 }
 
@@ -71,13 +72,20 @@ export async function buildInvoicePdf(input: {
       page = pdf.addPage([W, H]);
       y = H - M;
     }
-    total += l.totalCents;
+    // Net of any refund (e.g. after staff reduced the booked hours).
+    const net = l.totalCents - l.refundedCents;
+    total += net;
     text(l.date, cDate, 10, font);
     text(l.resourceName.slice(0, 34), cFac, 10, font);
     text(`${l.startHour}:00–${l.endHour}:00`, cTime, 10, font);
-    const amt = money(l.totalCents);
+    const amt = money(net);
     page.drawText(amt, { x: cAmt - font.widthOfTextAtSize(amt, 10), y, size: 10, font, color: navy });
     y -= 16;
+    if (l.refundedCents > 0) {
+      const note = `incl. ${money(l.refundedCents)} refunded`;
+      page.drawText(note, { x: cAmt - font.widthOfTextAtSize(note, 8), y: y + 3, size: 8, font, color: gray });
+      y -= 10;
+    }
   }
   if (lines.length === 0) {
     text("No confirmed bookings in this period.", cDate, 10, font, gray);

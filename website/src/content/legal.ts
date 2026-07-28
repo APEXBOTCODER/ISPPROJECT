@@ -33,7 +33,7 @@ WHAT WE COLLECT. Account details (name, email, phone), booking history, waiver s
 
 HOW WE USE IT. To operate bookings, send transactional emails (confirmations, reminders, cancellations), and — only with your separate consent — occasional park news.
 
-YOUR RIGHTS. Request a copy of your data or deletion of your account at any time via hello@infinitysportspark.com. Waiver records may be retained as required for legal purposes.
+YOUR RIGHTS. Request a copy of your data or deletion of your account at any time via admin@infinitysportspark.com. Waiver records may be retained as required for legal purposes.
 
 MINORS. Waivers for minors are signed by a parent or guardian; we collect only the minor's name and date of birth for that purpose.`,
   },

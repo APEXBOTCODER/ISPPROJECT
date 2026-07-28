@@ -41,7 +41,7 @@ export default async function LegalPage({
       </div>
 
       <p className="mt-8 text-xs text-navy/50">
-        Questions about this policy? Email hello@infinitysportspark.com.
+        Questions about this policy? Email admin@infinitysportspark.com.
       </p>
     </div>
   );

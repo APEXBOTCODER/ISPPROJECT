@@ -46,6 +46,7 @@ export async function generateUserInvoice(userId: string, fromRaw?: string | nul
       startHour: b.startHour,
       endHour: b.endHour,
       totalCents: b.totalCents,
+      refundedCents: b.refundedCents,
       resourceName: b.resource.name,
     })),
     contactEmail: settings["contact.email"],

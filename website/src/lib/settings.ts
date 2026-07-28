@@ -6,7 +6,7 @@ import { prisma } from "@/lib/prisma";
  * edit the values at /admin/content.
  */
 export const SETTING_DEFAULTS = {
-  "contact.email": "hello@infinitysportspark.com",
+  "contact.email": "admin@infinitysportspark.com",
   "contact.phone": "940-233-8993",
   "contact.address": "Denton County, Texas",
   "payment.zelleEmail": "infinitysportspark@gmail.com",
@@ -17,7 +17,7 @@ export const SETTING_DEFAULTS = {
     "Soccer is coming soon — fields are being finished ahead of our Summer 2026 launch.",
   "soccer.leaseText":
     "Are you a club looking for a long-term lease? Let's talk about dedicated season access at Infinity.",
-  "soccer.leaseEmail": "hello@infinitysportspark.com",
+  "soccer.leaseEmail": "admin@infinitysportspark.com",
   "membership.tiersText":
     "Membership tiers — coming soon. Member discounts, hour packages (buy 10, save 15%), and team season passes launch with the park in Summer 2026. Founding-member pricing is announced first to the mailing list.",
 } as const;
