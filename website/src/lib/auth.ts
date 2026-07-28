@@ -59,22 +59,32 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         });
         token.uid = dbUser.id;
         token.role = dbUser.role;
+        token.loginAt = Date.now(); // stable sign-in time (not refreshed on update)
       } else if (user) {
         token.uid = user.id;
         token.role = (user as { role?: string }).role ?? "CUSTOMER";
+        token.loginAt = Date.now();
       }
       return token;
     },
     async session({ session, token }) {
       if (session.user && token.uid) {
-        // Re-check the account each request so a deactivation (or role change)
-        // takes effect immediately, even for already-issued JWTs.
+        // Re-check the account each request so a deactivation, role change, or
+        // password reset takes effect immediately, even for already-issued JWTs.
         const dbUser = await prisma.user.findUnique({
           where: { id: token.uid as string },
-          select: { active: true, role: true },
+          select: { active: true, role: true, passwordChangedAt: true },
         });
         if (!dbUser || !dbUser.active) {
           // Deactivated/removed → present no authenticated user (locks them out).
+          delete (session as { user?: unknown }).user;
+          return session;
+        }
+        // A password change invalidates every session issued before it: if this
+        // token was signed in before passwordChangedAt (or predates the feature),
+        // reject it. Forces re-login after a self-service or admin reset.
+        const loginAt = (token as { loginAt?: number }).loginAt;
+        if (dbUser.passwordChangedAt && (!loginAt || dbUser.passwordChangedAt.getTime() > loginAt)) {
           delete (session as { user?: unknown }).user;
           return session;
         }

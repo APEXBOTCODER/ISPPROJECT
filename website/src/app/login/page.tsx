@@ -45,11 +45,11 @@ async function googleAction() {
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; timeout?: string; rate?: string }>;
+  searchParams: Promise<{ error?: string; timeout?: string; rate?: string; reset?: string }>;
 }) {
   const session = await auth();
   if (session?.user) redirect("/dashboard");
-  const { error, timeout, rate } = await searchParams;
+  const { error, timeout, rate, reset } = await searchParams;
 
   return (
     <div className="mx-auto max-w-md px-4 py-16">
@@ -58,6 +58,11 @@ export default async function LoginPage({
         Book fields, manage reservations, and view your receipts.
       </p>
 
+      {reset && !error && (
+        <p className="mt-4 rounded-md bg-green-50 px-4 py-3 text-sm text-green-800 ring-1 ring-green-200">
+          Your password has been reset. Log in with your new password.
+        </p>
+      )}
       {rate && (
         <p className="mt-4 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-red-200">
           Too many login attempts. Please wait about {rate} minute{rate === "1" ? "" : "s"} and try again.
@@ -87,7 +92,12 @@ export default async function LoginPage({
           />
         </div>
         <div>
-          <label htmlFor="password" className="block text-sm font-medium">Password</label>
+          <div className="flex items-center justify-between">
+            <label htmlFor="password" className="block text-sm font-medium">Password</label>
+            <Link href="/forgot-password" className="text-xs font-semibold text-sky hover:underline">
+              Forgot password?
+            </Link>
+          </div>
           <input
             id="password"
             name="password"

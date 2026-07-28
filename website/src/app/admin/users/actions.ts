@@ -3,8 +3,11 @@
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
-import { requireAdmin } from "@/lib/session";
+import { requireAdmin, requireStaff } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
+import { config } from "@/lib/config";
+import { sendEmail } from "@/lib/email";
+import { generateUserInvoice, invoiceFilename } from "@/lib/invoice";
 
 const roleSchema = z.enum(["CUSTOMER", "STAFF", "ADMIN"]);
 const passwordSchema = z.string().min(8, "Temporary password must be at least 8 characters.").max(100);
@@ -120,10 +123,48 @@ export async function resetUserPassword(formData: FormData) {
   if (!parsed.success) back(userId, { error: parsed.error.issues[0]?.message ?? "Invalid password." });
 
   const passwordHash = await bcrypt.hash(parsed.data, 12);
-  await prisma.user.update({ where: { id: userId }, data: { passwordHash } });
+  // Stamp passwordChangedAt so any existing sessions for this user are invalidated.
+  await prisma.user.update({ where: { id: userId }, data: { passwordHash, passwordChangedAt: new Date() } });
   back(userId, {
     ok: "Password reset. Share the temporary password with the user — they can sign in with it now.",
   });
+}
+
+/**
+ * Email the user their invoice PDF for a date range. Staff-only. The PDF is
+ * always sent to the account's OWN email from the database — never an address
+ * from the form — so this can't be used as a spam relay or to exfiltrate data.
+ */
+export async function emailInvoice(formData: FormData) {
+  await requireStaff();
+  const userId = String(formData.get("userId") ?? "");
+  if (!userId) redirect("/admin/users");
+
+  const result = await generateUserInvoice(
+    userId,
+    String(formData.get("from") ?? ""),
+    String(formData.get("to") ?? "")
+  );
+  if (!result) back(userId, { error: "User not found." });
+  const { pdf, user, from, to, count } = result;
+
+  await sendEmail({
+    to: user.email,
+    subject: `Your ${config.siteName} invoice (${from} to ${to})`,
+    text: [
+      `Hi ${user.name},`,
+      ``,
+      count > 0
+        ? `Attached is your invoice for ${count} booking(s) between ${from} and ${to}.`
+        : `Attached is your invoice for ${from} to ${to}. You have no confirmed bookings in this period.`,
+      ``,
+      `Questions? Just reply to this email.`,
+      `${config.siteName}`,
+    ].join("\n"),
+    attachments: [{ filename: invoiceFilename(user.name, from, to), content: pdf, contentType: "application/pdf" }],
+  });
+
+  back(userId, { ok: `Invoice emailed to ${user.email}.` });
 }
 
 /** Manually set/clear a user's email verification. ADMIN-only. */

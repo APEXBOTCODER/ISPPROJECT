@@ -4,7 +4,7 @@ import { requireStaff } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { formatCents } from "@/lib/pricing";
 import { userRefundCapCents } from "@/lib/reservations";
-import { setUserRole, setManualVerified, setUserActive, resetUserPassword, updateUserProfile } from "../actions";
+import { setUserRole, setManualVerified, setUserActive, resetUserPassword, updateUserProfile, emailInvoice } from "../actions";
 
 export const metadata = { title: "Admin · User" };
 export const dynamic = "force-dynamic";
@@ -238,8 +238,10 @@ export default async function AdminUserDetailPage({
       <section className="mt-6 rounded-2xl border border-navy/10 p-5">
         <h2 className="display text-xl text-navy">Invoice</h2>
         <p className="mt-1 text-sm text-navy/60">
-          Generate a PDF invoice of this user&apos;s confirmed bookings between two dates.
+          Generate a PDF invoice of this user&apos;s confirmed bookings between two dates — download it, or
+          email it straight to <strong>{user.email}</strong>.
         </p>
+        {/* Download (GET → PDF) */}
         <form method="get" action={`/api/admin/invoice/${user.id}`} className="mt-3 flex flex-wrap items-end gap-2">
           <label className="text-xs font-semibold uppercase tracking-wide text-navy/60">
             From
@@ -251,6 +253,21 @@ export default async function AdminUserDetailPage({
           </label>
           <button className="rounded-md border border-navy/20 px-4 py-2 text-sm font-semibold text-navy hover:bg-navy/5">
             Download invoice (PDF)
+          </button>
+        </form>
+        {/* Email to the user (POST server action; sends only to the account's own email) */}
+        <form action={emailInvoice} className="mt-2 flex flex-wrap items-end gap-2">
+          <input type="hidden" name="userId" value={user.id} />
+          <label className="text-xs font-semibold uppercase tracking-wide text-navy/60">
+            From
+            <input type="date" name="from" defaultValue={invFrom} className="mt-1 block rounded-md border border-navy/20 px-3 py-2 text-sm" />
+          </label>
+          <label className="text-xs font-semibold uppercase tracking-wide text-navy/60">
+            To
+            <input type="date" name="to" defaultValue={invTo} className="mt-1 block rounded-md border border-navy/20 px-3 py-2 text-sm" />
+          </label>
+          <button className="btn-brand rounded-md px-4 py-2 text-sm font-bold uppercase">
+            Email invoice to user
           </button>
         </form>
       </section>

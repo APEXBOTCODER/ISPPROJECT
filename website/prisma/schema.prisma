@@ -13,6 +13,10 @@ model User {
   id            String    @id @default(cuid())
   email         String    @unique
   passwordHash  String?
+  // Set whenever the password changes (self-service reset or admin reset). Any
+  // session/JWT issued before this instant is treated as invalid — a password
+  // change logs out all other sessions.
+  passwordChangedAt DateTime?
   name          String
   phone         String?
   role          String    @default("CUSTOMER") // CUSTOMER | STAFF | ADMIN
@@ -30,8 +34,25 @@ model User {
   reservations      Reservation[]
   waiverSignatures  WaiverSignature[]
   verificationCodes VerificationCode[]
+  passwordResets    PasswordResetToken[]
   refundsReceived   RefundRecord[]     @relation("UserRefunds")
   refundsIssued     RefundRecord[]     @relation("StaffRefunds")
+}
+
+/** Single-use, hashed, expiring token backing the self-service password reset.
+ *  Only the SHA-256 hash of the token is stored — the raw token lives only in
+ *  the emailed link. */
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  consumedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 // Audit trail for every refund (and the source of truth for a user's total
