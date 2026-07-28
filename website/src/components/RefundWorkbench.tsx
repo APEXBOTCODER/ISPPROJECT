@@ -57,6 +57,8 @@ export default function RefundWorkbench({
   action,
   returnTo,
   noShowAction,
+  rescheduleAction,
+  resources,
 }: {
   reservations: WorkbenchReservation[];
   standalone: WorkbenchStandalone[];
@@ -64,6 +66,9 @@ export default function RefundWorkbench({
   returnTo: string;
   /** When provided, each confirmed segment shows Reschedule + No-show controls. */
   noShowAction?: (formData: FormData) => Promise<void>;
+  /** When provided, a bulk "Reschedule" action is offered for a confirmed selection. */
+  rescheduleAction?: (formData: FormData) => Promise<void>;
+  resources?: { id: string; name: string }[];
 }) {
   // Flatten every refundable segment for lookup.
   const segById = useMemo(() => {
@@ -79,6 +84,9 @@ export default function RefundWorkbench({
   const [cancel, setCancel] = useState(true);
   const [amountDollars, setAmountDollars] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [rescheduleOpen, setRescheduleOpen] = useState(false);
+  const [targetResourceId, setTargetResourceId] = useState("");
+  const [dayShift, setDayShift] = useState("0");
 
   function toggle(id: string) {
     setSelected((prev) => {
@@ -112,6 +120,10 @@ export default function RefundWorkbench({
   // so it's a money-only (goodwill/policy) refund, no "cancel & free" choice.
   const allCancelled =
     selectedIds.length > 0 && selectedIds.every((id) => segById.get(id)?.status === "CANCELLED");
+  // Only a fully-confirmed selection can be rescheduled.
+  const allConfirmed =
+    selectedIds.length > 0 && selectedIds.every((id) => segById.get(id)?.status === "CONFIRMED");
+  const noReschedule = targetResourceId === "" && (parseInt(dayShift, 10) || 0) === 0;
 
   function openFor(ids: string[]) {
     setSelected(new Set(ids));
@@ -275,7 +287,7 @@ export default function RefundWorkbench({
       )}
 
       {/* Sticky action bar */}
-      {selectedIds.length > 0 && !open && (
+      {selectedIds.length > 0 && !open && !rescheduleOpen && (
         <div className="fixed inset-x-0 bottom-0 z-40 border-t border-navy/10 bg-white/95 backdrop-blur">
           <div className="mx-auto flex max-w-5xl items-center justify-between gap-3 px-4 py-3">
             <span className="text-sm text-navy">
@@ -290,6 +302,17 @@ export default function RefundWorkbench({
               >
                 Clear
               </button>
+              {rescheduleAction && (
+                <button
+                  type="button"
+                  disabled={!allConfirmed}
+                  title={allConfirmed ? "" : "Only confirmed bookings can be rescheduled"}
+                  onClick={() => { setTargetResourceId(""); setDayShift("0"); setRescheduleOpen(true); }}
+                  className="rounded-md border border-navy/20 px-4 py-2 text-sm font-semibold text-navy hover:bg-navy/5 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Reschedule
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => { setAmountDollars(""); setOpen(true); }}
@@ -298,6 +321,83 @@ export default function RefundWorkbench({
                 Review &amp; refund
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reschedule panel */}
+      {rescheduleOpen && rescheduleAction && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-navy/40 p-4 sm:items-center">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
+            <h3 className="display text-2xl text-navy">Reschedule {selectedIds.length} session(s)</h3>
+            <p className="mt-1 text-sm text-navy/60">
+              Move the selected bookings to a different ground and/or shift their dates. Each session keeps
+              its time of day, duration, and price. All-or-nothing — only if every target slot is free.
+            </p>
+
+            <ul className="mt-3 max-h-40 overflow-y-auto rounded-lg bg-navy/[0.03] p-3 text-xs text-navy/70">
+              {selectedIds.map((id) => {
+                const s = segById.get(id);
+                if (!s) return null;
+                return (
+                  <li key={id}>
+                    {s.resourceName} · {s.date} · {s.startHour}:00–{s.endHour}:00
+                  </li>
+                );
+              })}
+            </ul>
+
+            <form action={rescheduleAction} onSubmit={() => setSubmitting(true)} className="mt-4 space-y-3">
+              <input type="hidden" name="bookingIds" value={JSON.stringify(selectedIds)} />
+              <input type="hidden" name="returnTo" value={returnTo} />
+
+              <label className="block text-sm font-medium text-navy">
+                Target ground
+                <select
+                  name="targetResourceId"
+                  value={targetResourceId}
+                  onChange={(e) => setTargetResourceId(e.target.value)}
+                  className="mt-1 w-full rounded-md border border-navy/20 px-3 py-2 text-sm"
+                >
+                  <option value="">Keep same ground</option>
+                  {resources?.map((r) => (
+                    <option key={r.id} value={r.id}>{r.name}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="block text-sm font-medium text-navy">
+                Shift dates by (days)
+                <input
+                  name="dayShift"
+                  type="number"
+                  step="1"
+                  value={dayShift}
+                  onChange={(e) => setDayShift(e.target.value)}
+                  className="mt-1 w-full rounded-md border border-navy/20 px-3 py-2 text-sm"
+                />
+                <span className="mt-1 block text-xs text-navy/50">
+                  0 = same dates · e.g. 7 = one week later · -1 = a day earlier.
+                </span>
+              </label>
+
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => { setRescheduleOpen(false); setSubmitting(false); }}
+                  className="rounded-md border border-navy/20 px-4 py-2 text-sm font-semibold text-navy hover:bg-navy/5"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submitting || noReschedule}
+                  className="btn-brand rounded-md px-5 py-2 text-sm font-bold uppercase disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {submitting ? "Rescheduling…" : "Reschedule"}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

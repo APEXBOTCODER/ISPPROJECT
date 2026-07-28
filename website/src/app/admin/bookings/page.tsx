@@ -10,7 +10,7 @@ import { formatCents } from "@/lib/pricing";
 import { getBookingPolicy, refundPercentForPolicy } from "@/lib/policy";
 import { hoursUntilStart } from "@/lib/reservations";
 import { bulkRefund } from "@/app/admin/refunds/actions";
-import { toggleNoShow, confirmReservationPayment, confirmAllForUser, rejectReservationPayment } from "./actions";
+import { toggleNoShow, confirmReservationPayment, confirmAllForUser, rejectReservationPayment, bulkReschedule } from "./actions";
 
 export const metadata = { title: "Admin · Bookings & refunds" };
 export const dynamic = "force-dynamic";
@@ -67,7 +67,10 @@ export default async function AdminBookingsPage({
       .values()
   );
 
-  const policy = await getBookingPolicy();
+  const [policy, rescheduleResources] = await Promise.all([
+    getBookingPolicy(),
+    prisma.resource.findMany({ where: { active: true }, orderBy: { sortOrder: "asc" }, select: { id: true, name: true } }),
+  ]);
   // Refund the policy would give right now (guides the admin; they can override).
   const policyRefund = (b: { date: string; startHour: number; totalCents: number; refundedCents: number }) =>
     Math.round((Math.max(0, b.totalCents - b.refundedCents) * refundPercentForPolicy(hoursUntilStart(b.date, b.startHour), policy)) / 100);
@@ -226,6 +229,8 @@ export default async function AdminBookingsPage({
           action={bulkRefund}
           returnTo={`/admin/bookings?filter=${filter}`}
           noShowAction={toggleNoShow}
+          rescheduleAction={bulkReschedule}
+          resources={rescheduleResources}
         />
       </div>
     </div>

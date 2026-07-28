@@ -175,8 +175,14 @@ export async function createAdminReservation(formData: FormData) {
   redirect(`/admin/bookings?ok=${encodeURIComponent(`Booked ${prepared.length} session(s) for ${customer.name}.`)}`);
 }
 
-/** Move one booking (segment) to a new date/start-hour on the same facility,
- *  keeping the same duration and price. Atomic slot swap. */
+function addDays(date: string, n: number): string {
+  const d = new Date(`${date}T00:00:00`);
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Move one booking (segment) to a new ground and/or date/start-hour, keeping
+ *  the same duration and price. Atomic slot swap; only into a free slot. */
 export async function rescheduleBooking(formData: FormData) {
   await requireStaff();
   const id = String(formData.get("bookingId") ?? "");
@@ -191,23 +197,28 @@ export async function rescheduleBooking(formData: FormData) {
   const booking = await prisma.booking.findUnique({ where: { id }, include: { resource: true, user: true } });
   if (!booking || booking.status !== "CONFIRMED") fail(returnTo, "Only confirmed bookings can be rescheduled.");
 
+  // Optional ground change: default to the booking's current ground.
+  const newResourceId = String(formData.get("resourceId") ?? "") || booking.resourceId;
+  const target =
+    newResourceId === booking.resourceId
+      ? booking.resource
+      : await prisma.resource.findUnique({ where: { id: newResourceId } });
+  if (!target || !target.active) fail(returnTo, "The chosen ground isn't available.");
+
   const duration = booking.endHour - booking.startHour;
   const newEnd = newStart + duration;
-  const resource = booking.resource;
 
   const now = parkNow();
   const policy = await getBookingPolicy();
-  const maxDate = new Date(`${now.date}T00:00:00`);
-  maxDate.setDate(maxDate.getDate() + policy.advanceBookingDays);
-  const maxDateStr = maxDate.toISOString().slice(0, 10);
+  const maxDateStr = addDays(now.date, policy.advanceBookingDays);
   if (
     newDate < now.date ||
     newDate > maxDateStr ||
     (newDate === now.date && newStart <= now.hour) ||
-    newStart < resource.openHour ||
-    newEnd > resource.closeHour
+    newStart < target.openHour ||
+    newEnd > target.closeHour
   ) {
-    fail(returnTo, "New time is outside the bookable window.");
+    fail(returnTo, `New time is outside ${target.name}'s booking window.`);
   }
 
   const hours = Array.from({ length: duration }, (_, i) => newStart + i);
@@ -216,26 +227,127 @@ export async function rescheduleBooking(formData: FormData) {
       await tx.bookingSlot.deleteMany({ where: { bookingId: id } });
       await tx.booking.update({
         where: { id },
-        data: { date: newDate, startHour: newStart, endHour: newEnd },
+        data: { resourceId: target.id, date: newDate, startHour: newStart, endHour: newEnd },
       });
       await tx.bookingSlot.createMany({
-        data: hours.map((h) => ({ bookingId: id, resourceId: resource.id, slotKey: slotKey(newDate, h) })),
+        data: hours.map((h) => ({ bookingId: id, resourceId: target.id, slotKey: slotKey(newDate, h) })),
       });
     });
   } catch (error: unknown) {
     if ((error as { code?: string })?.code === "P2002") {
-      fail(returnTo, "That new slot is already taken.");
+      fail(returnTo, `That slot on ${target.name} is already taken.`);
     }
     throw error;
   }
 
   await sendEmail({
     to: booking.user.email,
-    subject: `Booking rescheduled — ${resource.name}`,
-    text: `Your ${resource.name} booking has been moved to ${newDate}, ${newStart}:00–${newEnd}:00 (US Central) by our staff.`,
+    subject: `Booking rescheduled — ${target.name}`,
+    text: `Your booking has been moved to ${target.name}, ${newDate}, ${newStart}:00–${newEnd}:00 (US Central) by our staff.`,
   });
 
   redirect(`/admin/bookings?ok=${encodeURIComponent("Booking rescheduled.")}`);
+}
+
+/**
+ * Reschedule several confirmed bookings at once: optionally move them all to a
+ * different ground, and/or shift every session by a number of days. Each
+ * session keeps its start/end hours, duration, and price. All-or-nothing — if
+ * any target slot is taken or out of window, nothing moves.
+ */
+export async function bulkReschedule(formData: FormData) {
+  await requireStaff();
+  const returnTo = String(formData.get("returnTo") || "/admin/bookings");
+
+  let ids: string[] = [];
+  try {
+    const parsed = JSON.parse(String(formData.get("bookingIds") ?? "[]"));
+    if (Array.isArray(parsed)) ids = parsed.filter((x) => typeof x === "string");
+  } catch {
+    /* empty */
+  }
+  if (ids.length === 0) fail(returnTo, "No bookings selected.");
+
+  const targetResourceId = String(formData.get("targetResourceId") ?? "").trim();
+  const dayShift = parseInt(String(formData.get("dayShift") ?? "0"), 10) || 0;
+  if (!targetResourceId && dayShift === 0) {
+    fail(returnTo, "Choose a different ground or a day shift (or both).");
+  }
+
+  const bookings = await prisma.booking.findMany({
+    where: { id: { in: ids }, status: "CONFIRMED" },
+    include: { resource: true, user: true },
+  });
+  if (bookings.length === 0) fail(returnTo, "None of the selected bookings can be rescheduled (must be confirmed).");
+
+  const target = targetResourceId ? await prisma.resource.findUnique({ where: { id: targetResourceId } }) : null;
+  if (targetResourceId && (!target || !target.active)) fail(returnTo, "The chosen ground isn't available.");
+
+  const now = parkNow();
+  const policy = await getBookingPolicy();
+  const maxDateStr = addDays(now.date, policy.advanceBookingDays);
+
+  const moves = bookings.map((b) => {
+    const res = target ?? b.resource;
+    const date = addDays(b.date, dayShift);
+    const hours = Array.from({ length: b.endHour - b.startHour }, (_, i) => b.startHour + i);
+    return { b, res, date, hours };
+  });
+
+  for (const m of moves) {
+    if (
+      m.date < now.date ||
+      m.date > maxDateStr ||
+      (m.date === now.date && m.b.startHour <= now.hour) ||
+      m.b.startHour < m.res.openHour ||
+      m.b.endHour > m.res.closeHour
+    ) {
+      fail(returnTo, `${m.res.name} on ${m.date} at ${m.b.startHour}:00 is outside the booking window — nothing moved.`);
+    }
+  }
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      // Free every selected booking's current slots first so a same-place move
+      // (dayShift 0, same ground) doesn't collide with itself.
+      for (const m of moves) await tx.bookingSlot.deleteMany({ where: { bookingId: m.b.id } });
+      for (const m of moves) {
+        await tx.booking.update({ where: { id: m.b.id }, data: { resourceId: m.res.id, date: m.date } });
+        await tx.bookingSlot.createMany({
+          data: m.hours.map((h) => ({ bookingId: m.b.id, resourceId: m.res.id, slotKey: slotKey(m.date, h) })),
+        });
+      }
+    });
+  } catch (error: unknown) {
+    if ((error as { code?: string })?.code === "P2002") {
+      fail(returnTo, "One or more target slots are already taken — nothing was moved. Adjust and try again.");
+    }
+    throw error;
+  }
+
+  // Notify each affected user once, listing their moved sessions.
+  const byUser = new Map<string, typeof moves>();
+  for (const m of moves) {
+    const arr = byUser.get(m.b.userId) ?? [];
+    arr.push(m);
+    byUser.set(m.b.userId, arr);
+  }
+  for (const [, list] of byUser) {
+    await sendEmail({
+      to: list[0].b.user.email,
+      subject: `Booking${list.length > 1 ? "s" : ""} rescheduled — ${config.siteName}`,
+      text: [
+        `Hi ${list[0].b.user.name},`,
+        ``,
+        `Our staff rescheduled the following session${list.length > 1 ? "s" : ""}:`,
+        ...list.map((m) => `  • ${m.res.name} — ${m.date}, ${m.b.startHour}:00–${m.b.endHour}:00 (US Central)`),
+        ``,
+        `Manage your bookings: ${config.siteUrl}/dashboard`,
+      ].join("\n"),
+    });
+  }
+
+  redirect(`/admin/bookings?ok=${encodeURIComponent(`Rescheduled ${moves.length} session(s).`)}`);
 }
 
 type Confirmable = {

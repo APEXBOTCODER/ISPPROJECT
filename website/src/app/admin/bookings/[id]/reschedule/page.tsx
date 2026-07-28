@@ -4,7 +4,7 @@ import { requireStaff } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { parkNow } from "@/lib/availability";
 import { getBookingPolicy } from "@/lib/policy";
-import SingleDayPicker from "@/components/SingleDayPicker";
+import RescheduleForm from "@/components/RescheduleForm";
 import { rescheduleBooking } from "../../actions";
 
 export const metadata = { title: "Admin · Reschedule" };
@@ -21,10 +21,14 @@ export default async function ReschedulePage({
   const { id } = await params;
   const { error } = await searchParams;
 
-  const booking = await prisma.booking.findUnique({
-    where: { id },
-    include: { resource: true, user: true },
-  });
+  const [booking, resources] = await Promise.all([
+    prisma.booking.findUnique({ where: { id }, include: { resource: true, user: true } }),
+    prisma.resource.findMany({
+      where: { active: true },
+      orderBy: { sortOrder: "asc" },
+      select: { id: true, name: true, openHour: true, closeHour: true },
+    }),
+  ]);
   if (!booking) notFound();
 
   const now = parkNow();
@@ -60,30 +64,19 @@ export default async function ReschedulePage({
       )}
 
       {booking.status === "CONFIRMED" && (
-        <form action={rescheduleBooking} className="mt-5 space-y-4 rounded-2xl border border-navy/10 p-5">
-          <input type="hidden" name="bookingId" value={booking.id} />
-          <p className="text-xs text-navy/60">
-            Moves this {duration}-hour session to a new date/time on the same facility,
-            keeping the same price. Must be a free slot within the booking window.
-          </p>
-          <div>
-            <span className="block text-sm font-medium text-navy">New date</span>
-            <div className="mt-1">
-              <SingleDayPicker name="date" defaultValue={booking.date} minDate={now.date} maxDate={rescheduleMax} />
-            </div>
-          </div>
-          <label className="block text-sm font-medium text-navy">
-            New start hour
-            <select name="startHour" defaultValue={booking.startHour} className="mt-1 w-full rounded-md border border-navy/20 px-3 py-2 text-sm">
-              {Array.from({ length: booking.resource.closeHour - duration - booking.resource.openHour + 1 }, (_, i) => booking.resource.openHour + i).map((h) => (
-                <option key={h} value={h}>{h}:00 – {h + duration}:00</option>
-              ))}
-            </select>
-          </label>
-          <button className="btn-brand rounded-md px-5 py-2 text-sm font-bold uppercase">
-            Reschedule
-          </button>
-        </form>
+        <RescheduleForm
+          action={rescheduleBooking}
+          booking={{
+            id: booking.id,
+            resourceId: booking.resourceId,
+            date: booking.date,
+            startHour: booking.startHour,
+            endHour: booking.endHour,
+          }}
+          resources={resources}
+          minDate={now.date}
+          maxDate={rescheduleMax}
+        />
       )}
     </div>
   );
