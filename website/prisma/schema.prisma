@@ -39,6 +39,24 @@ model User {
   refundsIssued     RefundRecord[]     @relation("StaffRefunds")
 }
 
+/**
+ * A sign-up awaiting email verification. The real User is NOT created until the
+ * emailed code is confirmed — so no account exists without a validated email.
+ * The password is stored hashed; the row is replaced on re-request and deleted
+ * on success.
+ */
+model PendingSignup {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  phone        String?
+  passwordHash String
+  codeHash     String
+  expiresAt    DateTime
+  attempts     Int      @default(0)
+  createdAt    DateTime @default(now())
+}
+
 /** Single-use, hashed, expiring token backing the self-service password reset.
  *  Only the SHA-256 hash of the token is stored — the raw token lives only in
  *  the emailed link. */

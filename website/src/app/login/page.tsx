@@ -45,11 +45,11 @@ async function googleAction() {
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; timeout?: string; rate?: string; reset?: string }>;
+  searchParams: Promise<{ error?: string; timeout?: string; rate?: string; reset?: string; verified?: string }>;
 }) {
   const session = await auth();
   if (session?.user) redirect("/dashboard");
-  const { error, timeout, rate, reset } = await searchParams;
+  const { error, timeout, rate, reset, verified } = await searchParams;
 
   return (
     <div className="mx-auto max-w-md px-4 py-16">
@@ -58,6 +58,11 @@ export default async function LoginPage({
         Book fields, manage reservations, and view your receipts.
       </p>
 
+      {verified && !error && (
+        <p className="mt-4 rounded-md bg-green-50 px-4 py-3 text-sm text-green-800 ring-1 ring-green-200">
+          Your email is verified and your account is created. Log in to continue.
+        </p>
+      )}
       {reset && !error && (
         <p className="mt-4 rounded-md bg-green-50 px-4 py-3 text-sm text-green-800 ring-1 ring-green-200">
           Your password has been reset. Log in with your new password.
