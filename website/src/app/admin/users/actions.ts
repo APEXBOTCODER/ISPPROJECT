@@ -167,6 +167,41 @@ export async function emailInvoice(formData: FormData) {
   back(userId, { ok: `Invoice emailed to ${user.email}.` });
 }
 
+/**
+ * Permanently delete a user account. ADMIN-only, and only when the account has
+ * NO history (no bookings, reservations, waivers, or refunds) — anything with
+ * history must be deactivated instead so records are preserved. Cleans up the
+ * account's verification codes / reset tokens, then deletes the user.
+ */
+export async function deleteUser(formData: FormData) {
+  const admin = await requireAdmin();
+  const userId = String(formData.get("userId") ?? "");
+  if (!userId) redirect("/admin/users");
+  if (userId === admin.id) back(userId, { error: "You can't delete your own account." });
+
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
+  if (!user) redirect("/admin/users");
+
+  const [bookings, reservations, waivers, refunds] = await Promise.all([
+    prisma.booking.count({ where: { userId } }),
+    prisma.reservation.count({ where: { userId } }),
+    prisma.waiverSignature.count({ where: { userId } }),
+    prisma.refundRecord.count({ where: { OR: [{ userId }, { staffId: userId }] } }),
+  ]);
+  if (bookings + reservations + waivers + refunds > 0) {
+    back(userId, {
+      error: "This account has bookings, reservations, waivers, or refund history — deactivate it instead to keep those records.",
+    });
+  }
+
+  await prisma.$transaction([
+    prisma.verificationCode.deleteMany({ where: { userId } }),
+    prisma.passwordResetToken.deleteMany({ where: { userId } }),
+    prisma.user.delete({ where: { id: userId } }),
+  ]);
+  redirect(`/admin/users?ok=${encodeURIComponent(`Deleted ${user.name}.`)}`);
+}
+
 /** Manually set/clear a user's email verification. ADMIN-only. */
 export async function setManualVerified(formData: FormData) {
   await requireAdmin();

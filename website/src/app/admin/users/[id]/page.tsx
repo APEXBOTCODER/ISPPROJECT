@@ -4,7 +4,8 @@ import { requireStaff } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { formatCents } from "@/lib/pricing";
 import { userRefundCapCents } from "@/lib/reservations";
-import { setUserRole, setManualVerified, setUserActive, resetUserPassword, updateUserProfile, emailInvoice } from "../actions";
+import ConfirmButton from "@/components/ConfirmButton";
+import { setUserRole, setManualVerified, setUserActive, resetUserPassword, updateUserProfile, emailInvoice, deleteUser } from "../actions";
 
 export const metadata = { title: "Admin · User" };
 export const dynamic = "force-dynamic";
@@ -22,7 +23,7 @@ export default async function AdminUserDetailPage({
   const { id } = await params;
   const { ok, error } = await searchParams;
 
-  const [user, reservations, standalone, refunds, cap] = await Promise.all([
+  const [user, reservations, standalone, refunds, cap, waiverCount] = await Promise.all([
     prisma.user.findUnique({ where: { id } }),
     prisma.reservation.findMany({
       where: { kind: "BOOKING", userId: id },
@@ -43,12 +44,15 @@ export default async function AdminUserDetailPage({
       take: 50,
     }),
     userRefundCapCents(id),
+    prisma.waiverSignature.count({ where: { userId: id } }),
   ]);
 
   if (!user) notFound();
 
   const isAdmin = staff.role === "ADMIN";
   const isSelf = staff.id === user.id;
+  const hasHistory =
+    reservations.length > 0 || standalone.length > 0 || refunds.length > 0 || waiverCount > 0;
   const invTo = new Date().toISOString().slice(0, 10);
   const invFromDate = new Date();
   invFromDate.setDate(invFromDate.getDate() - 30);
@@ -271,6 +275,35 @@ export default async function AdminUserDetailPage({
           </button>
         </form>
       </section>
+
+      {/* Danger zone — permanently delete (admin, not self, no history) */}
+      {isAdmin && !isSelf && (
+        <section className="mt-6 rounded-2xl border-2 border-red-200 p-5">
+          <h2 className="display text-xl text-red-700">Danger zone</h2>
+          {hasHistory ? (
+            <p className="mt-2 text-sm text-navy/70">
+              This account has bookings, reservations, waivers, or refund history, so it can&apos;t be
+              deleted (that would remove records). <strong>Deactivate</strong> it above instead.
+            </p>
+          ) : (
+            <>
+              <p className="mt-2 text-sm text-navy/70">
+                No bookings, reservations, waivers, or refunds on this account — it can be permanently
+                deleted (e.g. a stray or unverified sign-up). This can&apos;t be undone.
+              </p>
+              <form action={deleteUser} className="mt-3">
+                <input type="hidden" name="userId" value={user.id} />
+                <ConfirmButton
+                  message={`Permanently delete ${user.name}? This cannot be undone.`}
+                  className="rounded-md border border-red-300 bg-red-50 px-4 py-2 text-sm font-bold uppercase text-red-700 hover:bg-red-100"
+                >
+                  Delete account
+                </ConfirmButton>
+              </form>
+            </>
+          )}
+        </section>
+      )}
 
       {/* Reservations */}
       <section className="mt-8">
