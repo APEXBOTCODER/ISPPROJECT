@@ -1,10 +1,14 @@
 import { requireStaff } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
+import { getAllAssetMeta } from "@/lib/media";
+import SiteImage from "@/components/SiteImage";
 import {
   createResource,
   deleteResource,
   toggleResourceActive,
   updateResource,
+  uploadFacilityImage,
+  removeFacilityImage,
 } from "./actions";
 
 export const metadata = { title: "Admin · Facilities" };
@@ -125,10 +129,13 @@ export default async function AdminResourcesPage({
   await requireStaff();
   const { error, ok } = await searchParams;
 
-  const resources = await prisma.resource.findMany({
-    orderBy: { sortOrder: "asc" },
-    include: { _count: { select: { bookings: true } } },
-  });
+  const [resources, assetMeta] = await Promise.all([
+    prisma.resource.findMany({
+      orderBy: { sortOrder: "asc" },
+      include: { _count: { select: { bookings: true } } },
+    }),
+    getAllAssetMeta(),
+  ]);
 
   return (
     <div>
@@ -186,6 +193,33 @@ export default async function AdminResourcesPage({
                 Save changes
               </button>
             </form>
+
+            {/* Photo */}
+            <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-navy/10 pt-3">
+              <SiteImage slot={`facility-${r.id}`} label={r.name} className="h-20 w-32 shrink-0" variant="field" />
+              <form action={uploadFacilityImage} className="flex flex-wrap items-center gap-2">
+                <input type="hidden" name="id" value={r.id} />
+                <input
+                  type="file"
+                  name="file"
+                  accept="image/png,image/jpeg,image/webp,image/avif"
+                  required
+                  className="max-w-[13rem] text-xs text-navy/70 file:mr-2 file:rounded file:border-0 file:bg-navy/5 file:px-2 file:py-1 file:text-xs file:font-semibold file:text-navy"
+                />
+                <button className="rounded-md border border-navy/20 px-3 py-1.5 text-xs font-semibold text-navy hover:bg-navy/5">
+                  {assetMeta[`facility-${r.id}`] ? "Replace photo" : "Upload photo"}
+                </button>
+              </form>
+              {assetMeta[`facility-${r.id}`] && (
+                <form action={removeFacilityImage}>
+                  <input type="hidden" name="id" value={r.id} />
+                  <button className="rounded-md border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50">
+                    Remove photo
+                  </button>
+                </form>
+              )}
+              <span className="text-xs text-navy/40">JPG/PNG/WebP · max 6MB · shown on the facilities page.</span>
+            </div>
 
             {/* Separate forms — HTML forbids nesting them inside the edit form */}
             <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-navy/10 pt-3">

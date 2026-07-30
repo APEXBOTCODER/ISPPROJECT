@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { formatCents } from "@/lib/pricing";
-import PhotoPlaceholder from "@/components/PhotoPlaceholder";
+import SiteImage from "@/components/SiteImage";
 
 export const metadata = { title: "Facilities" };
 
@@ -31,7 +31,7 @@ export default async function FacilitiesPage() {
       <div className="mt-10 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
         {resources.map((r) => (
           <div key={r.id} className="card-lift flex flex-col overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-navy/10">
-            <PhotoPlaceholder label={r.name} className="h-44" variant={sportVariant[r.sport] ?? "field"} />
+            <SiteImage slot={`facility-${r.id}`} label={r.name} className="h-44 w-full !rounded-none" variant={sportVariant[r.sport] ?? "field"} />
             <div className="flex flex-1 flex-col p-5">
               <h2 className="display text-2xl text-navy">{r.name}</h2>
               <p className="mt-2 flex-1 text-sm leading-6 text-navy/70">{r.description}</p>

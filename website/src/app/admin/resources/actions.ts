@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { requireStaff } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
+import { ALLOWED_IMAGE_TYPES, MAX_IMAGE_BYTES } from "@/lib/media";
 
 const SPORTS = ["CRICKET", "SOCCER", "NETS", "TRAINING"] as const;
 
@@ -123,4 +124,40 @@ export async function deleteResource(formData: FormData) {
 
   await prisma.resource.delete({ where: { id } });
   redirect("/admin/resources?ok=" + encodeURIComponent(`"${resource.name}" deleted.`));
+}
+
+/** Upload/replace one facility's photo. Stored as a MediaAsset in the slot
+ *  `facility-<id>` and served from /api/media/[slot] like the other site images. */
+export async function uploadFacilityImage(formData: FormData) {
+  await requireStaff();
+  const id = String(formData.get("id") ?? "");
+  const resource = await prisma.resource.findUnique({ where: { id }, select: { name: true } });
+  if (!resource) fail("Facility not found.");
+
+  const file = formData.get("file");
+  if (!(file instanceof File) || file.size === 0) fail("Please choose an image file.");
+  if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
+    fail("Unsupported file type — upload a PNG, JPG, WebP, or AVIF image.");
+  }
+  if (file.size > MAX_IMAGE_BYTES) {
+    fail(`Image is too large (${(file.size / 1024 / 1024).toFixed(1)}MB). Max 6MB.`);
+  }
+
+  const slot = `facility-${id}`;
+  const data = Buffer.from(await file.arrayBuffer());
+  await prisma.mediaAsset.upsert({
+    where: { slot },
+    create: { slot, mimeType: file.type, data, alt: resource.name },
+    update: { mimeType: file.type, data, alt: resource.name },
+  });
+  redirect("/admin/resources?ok=" + encodeURIComponent(`Photo updated for "${resource.name}".`));
+}
+
+/** Remove a facility's photo (restores the branded placeholder). */
+export async function removeFacilityImage(formData: FormData) {
+  await requireStaff();
+  const id = String(formData.get("id") ?? "");
+  const resource = await prisma.resource.findUnique({ where: { id }, select: { name: true } });
+  await prisma.mediaAsset.deleteMany({ where: { slot: `facility-${id}` } });
+  redirect("/admin/resources?ok=" + encodeURIComponent(`Photo removed${resource ? ` for "${resource.name}"` : ""}.`));
 }
