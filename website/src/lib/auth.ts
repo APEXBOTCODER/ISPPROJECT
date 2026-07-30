@@ -5,10 +5,12 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { config } from "@/lib/config";
+import { verifyAndConsumeSecondFactor } from "@/lib/twoFactor";
 
 const credentialsSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
+  totp: z.string().optional(),
 });
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
@@ -37,6 +39,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         const valid = await bcrypt.compare(parsed.data.password, user.passwordHash);
         if (!valid) return null;
+
+        // 2FA gate: when enabled, a valid TOTP or backup code is required. This
+        // is the authoritative check — a session is never issued without it.
+        if (user.totpEnabled) {
+          const ok = await verifyAndConsumeSecondFactor(user, parsed.data.totp ?? "");
+          if (!ok) return null;
+        }
 
         return { id: user.id, email: user.email, name: user.name, role: user.role };
       },

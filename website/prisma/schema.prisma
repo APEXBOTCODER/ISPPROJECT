@@ -17,6 +17,11 @@ model User {
   // session/JWT issued before this instant is treated as invalid — a password
   // change logs out all other sessions.
   passwordChangedAt DateTime?
+  // Opt-in TOTP 2FA (staff/admin). Secret is AES-GCM encrypted at rest; backup
+  // codes are stored hashed. Enabled only after the first code is confirmed.
+  totpEnabled     Boolean @default(false)
+  totpSecret      String?
+  totpBackupCodes String? // JSON array of SHA-256-hashed one-time recovery codes
   name          String
   phone         String?
   role          String    @default("CUSTOMER") // CUSTOMER | STAFF | ADMIN

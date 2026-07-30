@@ -104,6 +104,9 @@ export default async function DashboardPage({
           <Link href="/book" className="btn-brand rounded-md px-4 py-2 text-sm uppercase">
             Book a field
           </Link>
+          <Link href="/account/security" className="rounded-md border border-navy/20 px-4 py-2 text-sm font-semibold text-navy hover:bg-navy/5">
+            Security
+          </Link>
           <form action={logoutAction}>
             <button className="rounded-md border border-navy/20 px-4 py-2 text-sm font-semibold text-navy hover:bg-navy/5">
               Log out
@@ -126,6 +129,17 @@ export default async function DashboardPage({
         <p className="mt-4 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-red-200">
           {error}
         </p>
+      )}
+
+      {(dbUser?.role === "ADMIN" || dbUser?.role === "STAFF") && !dbUser?.totpEnabled && (
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-900 ring-1 ring-amber-300">
+          <span>
+            <strong>Protect your staff account.</strong> Turn on two-factor authentication for stronger security.
+          </span>
+          <Link href="/account/security" className="btn-brand rounded-md px-4 py-2 text-xs font-bold uppercase">
+            Enable 2FA
+          </Link>
+        </div>
       )}
 
       {!waiverCurrent && (
