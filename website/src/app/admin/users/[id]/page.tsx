@@ -5,7 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { formatCents } from "@/lib/pricing";
 import { userRefundCapCents } from "@/lib/reservations";
 import ConfirmButton from "@/components/ConfirmButton";
-import { setUserRole, setManualVerified, setUserActive, resetUserPassword, updateUserProfile, emailInvoice, deleteUser } from "../actions";
+import { setUserRole, setManualVerified, setUserActive, resetUserPassword, updateUserProfile, emailInvoice, deleteUser, resetUserTwoFactor } from "../actions";
 
 export const metadata = { title: "Admin · User" };
 export const dynamic = "force-dynamic";
@@ -236,6 +236,32 @@ export default async function AdminUserDetailPage({
           Share the temporary password with the user over a trusted channel. It&apos;s shown in plain text so
           you can pass it on; ask them to change it after signing in.
         </p>
+
+        {/* Two-factor recovery */}
+        <div className="mt-4 border-t border-navy/10 pt-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-sm text-navy">
+              Two-factor authentication: <strong>{user.totpEnabled ? "On" : "Off"}</strong>
+            </span>
+            {isAdmin && user.totpEnabled && (
+              <form action={resetUserTwoFactor}>
+                <input type="hidden" name="userId" value={user.id} />
+                <ConfirmButton
+                  message={`Reset ${user.name}'s two-factor? They'll be able to log in with just their password until they set it up again.`}
+                  className="rounded-md border border-amber-300 bg-amber-50 px-4 py-1.5 text-xs font-bold uppercase text-amber-800 hover:bg-amber-100"
+                >
+                  Reset 2FA
+                </ConfirmButton>
+              </form>
+            )}
+          </div>
+          {isAdmin && user.totpEnabled && (
+            <p className="mt-1 text-xs text-navy/50">
+              Use if they lost their phone and backup codes. Turns 2FA off so they can re-enroll from My
+              Account → Security. Doesn&apos;t change their password.
+            </p>
+          )}
+        </div>
       </section>
 
       {/* Invoice */}

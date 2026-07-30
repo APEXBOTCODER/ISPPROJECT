@@ -202,6 +202,26 @@ export async function deleteUser(formData: FormData) {
   redirect(`/admin/users?ok=${encodeURIComponent(`Deleted ${user.name}.`)}`);
 }
 
+/**
+ * Reset (turn off) a user's two-factor authentication so they can re-enroll —
+ * e.g. a locked-out staff member who lost their phone and backup codes.
+ * ADMIN-only. It does NOT weaken their password; they log in with password only
+ * until they set 2FA up again from their Security page.
+ */
+export async function resetUserTwoFactor(formData: FormData) {
+  await requireAdmin();
+  const userId = String(formData.get("userId") ?? "");
+  if (!userId) redirect("/admin/users");
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
+  if (!user) redirect("/admin/users");
+
+  await prisma.user.update({
+    where: { id: userId },
+    data: { totpEnabled: false, totpSecret: null, totpBackupCodes: null },
+  });
+  back(userId, { ok: `Two-factor reset for ${user.name} — ask them to set it up again from My Account → Security.` });
+}
+
 /** Manually set/clear a user's email verification. ADMIN-only. */
 export async function setManualVerified(formData: FormData) {
   await requireAdmin();
