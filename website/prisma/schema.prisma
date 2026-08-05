@@ -42,6 +42,8 @@ model User {
   passwordResets    PasswordResetToken[]
   refundsReceived   RefundRecord[]     @relation("UserRefunds")
   refundsIssued     RefundRecord[]     @relation("StaffRefunds")
+  paymentsReceived  Payment[]          @relation("UserPayments")
+  paymentsRecorded  Payment[]          @relation("StaffPayments")
 }
 
 /**
@@ -112,8 +114,14 @@ model Reservation {
   label         String? // entity/org name (bookings) or reason (blocks)
   totalCents    Int      @default(0)
   refundedCents Int      @default(0)
+  // Installment / payment-plan reservations: paymentPlan flags the reservation as
+  // pay-by-installments (blocked from cancellation except admin override), and
+  // paidCents is the running total of recorded payments (kept in sync with the
+  // append-only Payment ledger). Balance owed = totalCents - paidCents.
+  paymentPlan   Boolean  @default(false)
+  paidCents     Int      @default(0)
   paymentRef    String?
-  status        String   @default("CONFIRMED") // PENDING | CONFIRMED | CANCELLED
+  status        String   @default("CONFIRMED") // PENDING_PAYMENT | CONFIRMED | CANCELLED
   notes         String?
   discountCode  String? // discount code applied at booking (uppercase), if any
   discountCents Int      @default(0) // total discount given on this reservation
@@ -122,8 +130,34 @@ model Reservation {
 
   user     User      @relation(fields: [userId], references: [id])
   bookings Booking[]
+  payments Payment[]
 
   @@index([userId])
+}
+
+// Append-only ledger of payments recorded against a reservation — the source of
+// truth for installment / payment-plan collections and history. One row per
+// deposit or installment an admin records. Reservation.paidCents mirrors the sum.
+model Payment {
+  id            String   @id @default(cuid())
+  // Null for an account-level ADVANCE payment (a prepayment/credit not tied to a
+  // specific reservation); set when the payment is against one reservation.
+  reservationId String?
+  userId        String // the customer who paid (denormalized for per-user reports)
+  staffId       String // who recorded it
+  amountCents   Int
+  method        String   @default("ZELLE") // ZELLE | CASH | CARD | CHECK | OTHER
+  kind          String   @default("INSTALLMENT") // DEPOSIT | INSTALLMENT | FULL | ADVANCE
+  note          String?
+  createdAt     DateTime @default(now())
+
+  reservation Reservation? @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  user        User         @relation("UserPayments", fields: [userId], references: [id])
+  staff       User         @relation("StaffPayments", fields: [staffId], references: [id])
+
+  @@index([reservationId])
+  @@index([userId])
+  @@index([createdAt])
 }
 
 model DiscountCode {

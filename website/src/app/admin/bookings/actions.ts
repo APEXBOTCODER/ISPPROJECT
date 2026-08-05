@@ -11,6 +11,17 @@ import { getBookingPolicy } from "@/lib/policy";
 import { refundBookingAdvanced } from "@/lib/reservations";
 import { sendEmail } from "@/lib/email";
 import { config } from "@/lib/config";
+import { makeReservationCode } from "@/lib/reservationCode";
+
+/** A reservation code not currently in use (retries on the rare collision). */
+async function uniqueCode(): Promise<string> {
+  for (let i = 0; i < 6; i++) {
+    const code = makeReservationCode();
+    const clash = await prisma.reservation.findFirst({ where: { code }, select: { id: true } });
+    if (!clash) return code;
+  }
+  return `ISP-${randomUUID().slice(0, 6).toUpperCase()}`;
+}
 
 const segmentSchema = z.object({
   resourceId: z.string().min(1),
@@ -111,7 +122,23 @@ export async function createAdminReservation(formData: FormData) {
   }
 
   const grandTotal = prepared.reduce((s, p) => s + p.totalCents, 0);
-  const ref = `ADMIN-${randomUUID()}`;
+
+  // Payment plan: not a comp — the customer owes the total and pays in
+  // installments. An optional deposit is recorded now. Slots still lock (the
+  // admin flow always confirms), but revenue counts only what's actually paid.
+  const isPlan = String(formData.get("paymentPlan") ?? "") === "on";
+  const methodRaw = String(formData.get("method") ?? "ZELLE").toUpperCase();
+  const method = ["ZELLE", "CASH", "CARD", "CHECK", "OTHER"].includes(methodRaw) ? methodRaw : "ZELLE";
+  let depositCents = 0;
+  if (isPlan) {
+    const dRaw = String(formData.get("deposit") ?? "").trim();
+    if (dRaw) {
+      const c = Math.round(parseFloat(dRaw) * 100);
+      if (!Number.isNaN(c) && c > 0) depositCents = Math.min(c, grandTotal);
+    }
+  }
+  const ref = isPlan ? `PLAN-${randomUUID()}` : `ADMIN-${randomUUID()}`;
+  const code = await uniqueCode();
 
   let reservationId: string;
   try {
@@ -119,11 +146,15 @@ export async function createAdminReservation(formData: FormData) {
       const res = await tx.reservation.create({
         data: {
           userId: customerId,
+          code,
           kind: "BOOKING",
           label: String(formData.get("label") ?? "").slice(0, 120) || `Staff booking by ${staff.name}`,
           totalCents: grandTotal,
           status: "CONFIRMED",
           paymentRef: ref,
+          paymentPlan: isPlan,
+          // Non-plan admin bookings are comps counted as paid in full; plans owe.
+          paidCents: isPlan ? depositCents : grandTotal,
           notes: `Created by staff (${staff.email})`,
         },
       });
@@ -147,6 +178,19 @@ export async function createAdminReservation(formData: FormData) {
             resourceId: seg.resourceId,
             slotKey: slotKey(seg.date, h),
           })),
+        });
+      }
+      if (isPlan && depositCents > 0) {
+        await tx.payment.create({
+          data: {
+            reservationId: res.id,
+            userId: customerId,
+            staffId: staff.id,
+            amountCents: depositCents,
+            method,
+            kind: "DEPOSIT",
+            note: "Deposit at booking",
+          },
         });
       }
       return res;
@@ -175,12 +219,26 @@ export async function createAdminReservation(formData: FormData) {
       ...prepared.map((s) => `  • ${s.resourceName} — ${s.date}, ${s.startHour}:00–${s.endHour}:00`),
       ``,
       `Total: ${formatCents(grandTotal)}`,
+      ...(isPlan
+        ? [
+            `Deposit received: ${formatCents(depositCents)}`,
+            `Balance to pay: ${formatCents(grandTotal - depositCents)}`,
+            ``,
+            `This is a payment plan — you can settle the balance in installments. We'll email a receipt each time a payment is recorded.`,
+          ]
+        : []),
       ``,
       `Manage it any time: ${config.siteUrl}/dashboard`,
     ].join("\n"),
   });
 
-  redirect(`/admin/bookings?ok=${encodeURIComponent(`Booked ${prepared.length} session(s) for ${customer.name}.`)}`);
+  redirect(
+    `/admin/bookings?ok=${encodeURIComponent(
+      isPlan
+        ? `Payment plan created for ${customer.name} — ${formatCents(grandTotal - depositCents)} balance. Manage it under Installments.`
+        : `Booked ${prepared.length} session(s) for ${customer.name}.`
+    )}`
+  );
 }
 
 function addDays(date: string, n: number): string {
@@ -449,7 +507,9 @@ async function emailReservationConfirmed(r: Confirmable) {
 async function confirmOne(r: Confirmable) {
   const ref = `ZELLE-${r.code ?? r.id}`;
   await prisma.$transaction([
-    prisma.reservation.update({ where: { id: r.id }, data: { status: "CONFIRMED", paymentRef: ref } }),
+    // Zelle payment is verified in full before confirming, so the reservation is
+    // paid in full — record that so the account balance is accurate.
+    prisma.reservation.update({ where: { id: r.id }, data: { status: "CONFIRMED", paymentRef: ref, paidCents: r.totalCents } }),
     prisma.booking.updateMany({ where: { reservationId: r.id }, data: { status: "CONFIRMED", paymentRef: ref } }),
   ]);
   await emailReservationConfirmed(r);

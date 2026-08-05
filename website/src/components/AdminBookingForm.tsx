@@ -55,6 +55,12 @@ export default function AdminBookingForm({
   const [toHour, setToHour] = useState(9);
   const [segments, setSegments] = useState<Segment[]>([]);
   const [label, setLabel] = useState("");
+  // Payment plan (installments): when on, the booking is NOT a comp — the customer
+  // owes the total and pays over time; an optional deposit can be recorded now.
+  const [plan, setPlan] = useState(false);
+  const [deposit, setDeposit] = useState("");
+  const [method, setMethod] = useState("ZELLE");
+  const PLAN_METHODS = ["ZELLE", "CASH", "CARD", "CHECK", "OTHER"]; // mirrors lib/installments PAYMENT_METHODS
   const [notice, setNotice] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -237,11 +243,39 @@ export default function AdminBookingForm({
               </label>
               <input name="label" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Note / organization (optional)"
                 className="w-full rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm text-white placeholder:text-white/40" />
+
+              <label className="flex items-center gap-2 rounded-md bg-white/5 px-3 py-2 text-sm">
+                <input type="checkbox" name="paymentPlan" checked={plan} onChange={(e) => setPlan(e.target.checked)} className="h-4 w-4" />
+                <span>Payment plan <span className="text-white/50">(pay by installments)</span></span>
+              </label>
+              {plan && (
+                <div className="space-y-2 rounded-md bg-white/5 p-2">
+                  <label className="block text-xs text-white/70">
+                    Deposit received now <span className="text-white/40">(optional)</span>
+                    <div className="mt-1 flex items-center gap-1">
+                      <span className="text-white/60">$</span>
+                      <input name="deposit" type="number" step="0.01" min="0" value={deposit} onChange={(e) => setDeposit(e.target.value)}
+                        placeholder="e.g. 200" className="w-full rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm text-white placeholder:text-white/40" />
+                    </div>
+                  </label>
+                  <label className="block text-xs text-white/70">
+                    Method
+                    <select name="method" value={method} onChange={(e) => setMethod(e.target.value)}
+                      className="mt-1 block w-full rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm text-white">
+                      {PLAN_METHODS.map((m) => <option key={m} value={m} className="text-navy">{m.charAt(0) + m.slice(1).toLowerCase()}</option>)}
+                    </select>
+                  </label>
+                  <p className="text-xs text-white/60">Slots lock immediately; the balance is tracked under Installments.</p>
+                </div>
+              )}
+
               <button type="submit" disabled={!canSubmit} className="btn-brand w-full rounded-md px-4 py-3 text-sm uppercase disabled:opacity-50">
-                {submitting ? "Booking…" : `Confirm booking ${money(grandTotal)}`}
+                {submitting ? "Booking…" : plan ? `Create plan ${money(grandTotal)}` : `Confirm booking ${money(grandTotal)}`}
               </button>
               {!customer && <p className="text-xs text-amber-200">Select a customer first.</p>}
-              <p className="text-xs text-white/60">Comp booking — no payment is charged.</p>
+              <p className="text-xs text-white/60">
+                {plan ? "Payment plan — customer owes the total; record installments under Installments." : "Comp booking — no payment is charged."}
+              </p>
             </form>
           </>
         )}

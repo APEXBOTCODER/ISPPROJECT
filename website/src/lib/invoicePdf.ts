@@ -7,6 +7,7 @@ export interface InvoiceLine {
   totalCents: number;
   refundedCents: number;
   resourceName: string;
+  code?: string | null;
 }
 
 function money(cents: number) {
@@ -21,11 +22,12 @@ export async function buildInvoicePdf(input: {
   to: string;
   issuedOn: string;
   lines: InvoiceLine[];
+  account?: { billedCents: number; paidCents: number; balanceCents: number };
   contactEmail: string;
   zelleEmail: string;
   zelleName: string;
 }): Promise<Uint8Array> {
-  const { siteName, user, from, to, issuedOn, lines, contactEmail, zelleEmail, zelleName } = input;
+  const { siteName, user, from, to, issuedOn, lines, account, contactEmail, zelleEmail, zelleName } = input;
   const pdf = await PDFDocument.create();
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
@@ -81,6 +83,10 @@ export async function buildInvoicePdf(input: {
     const amt = money(net);
     page.drawText(amt, { x: cAmt - font.widthOfTextAtSize(amt, 10), y, size: 10, font, color: navy });
     y -= 16;
+    if (l.code) {
+      page.drawText(l.code, { x: cFac, y: y + 3, size: 8, font, color: gray });
+      y -= 10;
+    }
     if (l.refundedCents > 0) {
       const note = `incl. ${money(l.refundedCents)} refunded`;
       page.drawText(note, { x: cAmt - font.widthOfTextAtSize(note, 8), y: y + 3, size: 8, font, color: gray });
@@ -96,10 +102,33 @@ export async function buildInvoicePdf(input: {
   y -= 8;
   page.drawLine({ start: { x: M, y: y + 6 }, end: { x: W - M, y: y + 6 }, thickness: 0.7, color: rgb(0.8, 0.82, 0.86) });
   y -= 10;
-  text("Total", M, 12, bold);
+  text("Total (this period)", M, 12, bold);
   const totalStr = money(total);
   page.drawText(totalStr, { x: cAmt - bold.widthOfTextAtSize(totalStr, 12), y, size: 12, font: bold, color: navy });
-  y -= 34;
+  y -= 24;
+
+  // Account status (all-time across this customer's bookings): paid vs balance.
+  if (account) {
+    const rightNum = (s: string, size: number, f: PDFFont, color = navy) =>
+      page.drawText(s, { x: cAmt - f.widthOfTextAtSize(s, size), y, size, font: f, color });
+    text("Account status", M, 9, bold, gray);
+    y -= 14;
+    text("Total booked", M, 10, font, gray);
+    rightNum(money(account.billedCents), 10, font);
+    y -= 14;
+    text("Paid to date", M, 10, font, gray);
+    rightNum(money(account.paidCents), 10, font);
+    y -= 16;
+    const due = account.balanceCents > 0;
+    const credit = account.balanceCents < 0;
+    const label = due ? "Balance due" : credit ? "Advance credit" : "Balance";
+    const amount = money(Math.abs(account.balanceCents));
+    text(label, M, 12, bold, due ? rgb(0.7, 0.3, 0.05) : navy);
+    rightNum(amount, 12, bold, due ? rgb(0.7, 0.3, 0.05) : navy);
+    y -= 30;
+  } else {
+    y -= 10;
+  }
 
   // Payment note
   text("Payment", M, 9, bold, gray);

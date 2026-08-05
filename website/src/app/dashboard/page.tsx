@@ -6,6 +6,7 @@ import { parkNow } from "@/lib/availability";
 import { getCurrentWaiver } from "@/lib/waiver";
 import { getBookingPolicy } from "@/lib/policy";
 import { getSettings } from "@/lib/settings";
+import { userAccountSummary } from "@/lib/installments";
 import { cancelBooking, cancelReservation, cancelPendingReservation, logoutAction } from "./actions";
 import { emailSignedWaiver } from "@/app/waiver/actions";
 
@@ -42,12 +43,14 @@ export default async function DashboardPage({
   const { error, cancelled, waiverEmailed } = await searchParams;
   const now = parkNow();
 
-  const [bookings, signatures, currentWaiver, dbUser, policy, settings] = await Promise.all([
+  const [bookings, signatures, currentWaiver, dbUser, policy, settings, myPayments, account] = await Promise.all([
     prisma.booking.findMany({
       where: { userId: user.id, status: { not: "BLOCKED" } },
       include: {
         resource: true,
-        reservation: { select: { id: true, code: true, status: true, totalCents: true } },
+        reservation: {
+          select: { id: true, code: true, status: true, totalCents: true, paymentPlan: true, paidCents: true },
+        },
       },
       orderBy: [{ date: "desc" }, { startHour: "desc" }],
       take: 50,
@@ -60,8 +63,19 @@ export default async function DashboardPage({
     prisma.user.findUnique({ where: { id: user.id } }),
     getBookingPolicy(),
     getSettings(),
+    prisma.payment.findMany({ where: { userId: user.id }, orderBy: { createdAt: "desc" } }),
+    userAccountSummary(user.id),
   ]);
   const expiryLabel = policy.unpaidExpiryHours === 1 ? "1 hour" : `${policy.unpaidExpiryHours} hours`;
+
+  // Payment history grouped by reservation, for the payment-plan panels below.
+  const paymentsByReservation = new Map<string, typeof myPayments>();
+  for (const p of myPayments) {
+    if (!p.reservationId) continue; // account-level advances aren't tied to a reservation
+    const arr = paymentsByReservation.get(p.reservationId) ?? [];
+    arr.push(p);
+    paymentsByReservation.set(p.reservationId, arr);
+  }
 
   const upcoming = bookings.filter(
     (b) =>
@@ -152,6 +166,37 @@ export default async function DashboardPage({
             Sign waiver now
           </Link>
         </div>
+      )}
+
+      {/* Account balance */}
+      {(account.billedCents > 0 || account.paidCents > 0) && (
+        <section className="mt-8 rounded-2xl border border-navy/10 p-5">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h2 className="display text-xl text-navy">Account</h2>
+              <p className="mt-1 text-sm text-navy/60">
+                Booked {formatCents(account.billedCents)} · Paid {formatCents(account.paidCents)}
+                {account.advanceCents > 0 ? ` (incl. ${formatCents(account.advanceCents)} advance)` : ""}
+              </p>
+            </div>
+            <div
+              className={`rounded-xl px-4 py-3 text-right ${
+                account.balanceCents > 0
+                  ? "bg-amber-50 ring-1 ring-amber-200"
+                  : account.balanceCents < 0
+                    ? "bg-green-50 ring-1 ring-green-200"
+                    : "bg-navy/5"
+              }`}
+            >
+              <div className="text-xs font-semibold uppercase text-navy/50">
+                {account.balanceCents > 0 ? "Balance due" : account.balanceCents < 0 ? "Advance credit" : "Settled"}
+              </div>
+              <div className="text-2xl font-bold text-navy">
+                {account.balanceCents === 0 ? "$0.00" : formatCents(Math.abs(account.balanceCents))}
+              </div>
+            </div>
+          </div>
+        </section>
       )}
 
       {/* Verification status */}
@@ -259,14 +304,22 @@ export default async function DashboardPage({
               const hasActive = group.some((b) => b.status === "CONFIRMED");
               const isPending = group.some((b) => b.status === "PENDING_PAYMENT");
               const reservation = group[0].reservation;
+              const isPlan = reservation?.paymentPlan ?? false;
+              const planPaid = reservation?.paidCents ?? 0;
+              const planTotal = reservation?.totalCents ?? 0;
+              const planBalance = Math.max(0, planTotal - planPaid);
+              const planPayments = paymentsByReservation.get(reservationId) ?? [];
               return (
                 <div key={reservationId} className="rounded-xl border border-navy/10 p-4">
-                  {multi && (
+                  {(multi || (reservation?.code && !isPlan && !isPending)) && (
                     <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-navy/10 pb-2">
                       <span className="text-sm font-semibold text-navy">
-                        Reservation · {group.length} sessions
+                        {reservation?.code && !isPlan && !isPending && (
+                          <span className="mr-2 rounded bg-navy px-2 py-0.5 font-mono text-xs text-white">{reservation.code}</span>
+                        )}
+                        {multi ? `Reservation · ${group.length} sessions` : "Reservation"}
                       </span>
-                      {hasActive && (
+                      {multi && hasActive && !isPlan && (
                         <form action={cancelReservation}>
                           <input type="hidden" name="reservationId" value={reservationId} />
                           <button className="rounded-md border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50">
@@ -274,6 +327,37 @@ export default async function DashboardPage({
                           </button>
                         </form>
                       )}
+                    </div>
+                  )}
+                  {isPlan && (
+                    <div className="mb-3 rounded-lg border border-sky/30 bg-sky/5 p-4 text-sm">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-bold text-navy">
+                          Payment plan
+                          {reservation?.code ? (
+                            <span className="ml-2 rounded bg-navy px-2 py-0.5 font-mono text-xs text-white">{reservation.code}</span>
+                          ) : null}
+                        </span>
+                        <span className={`rounded-full px-3 py-1 text-xs font-semibold ring-1 ${planBalance === 0 ? "bg-green-50 text-green-700 ring-green-200" : "bg-amber-50 text-amber-800 ring-amber-200"}`}>
+                          {planBalance === 0 ? "Paid in full" : `Balance ${formatCents(planBalance)}`}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-navy/80">
+                        Paid <strong>{formatCents(planPaid)}</strong> of <strong>{formatCents(planTotal)}</strong>
+                      </p>
+                      {planPayments.length > 0 && (
+                        <ul className="mt-2 space-y-1">
+                          {planPayments.map((pay) => (
+                            <li key={pay.id} className="flex justify-between gap-2 text-xs text-navy/60">
+                              <span>{pay.createdAt.toISOString().slice(0, 10)} · {pay.method.toLowerCase()}</span>
+                              <span className="font-semibold text-navy">{formatCents(pay.amountCents)}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      <p className="mt-2 text-xs text-navy/50">
+                        This reservation is on a payment plan and can&apos;t be cancelled online. Contact us to make changes.
+                      </p>
                     </div>
                   )}
                   {isPending && reservation && (
@@ -318,7 +402,7 @@ export default async function DashboardPage({
                           <span className={`rounded-full px-3 py-1 text-xs font-semibold ring-1 ${statusStyles[b.status] ?? statusStyles.CANCELLED}`}>
                             {statusLabel(b.status)}
                           </span>
-                          {b.status === "CONFIRMED" && (
+                          {b.status === "CONFIRMED" && !isPlan && (
                             <form action={cancelBooking}>
                               <input type="hidden" name="bookingId" value={b.id} />
                               <button className="rounded-md border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50">

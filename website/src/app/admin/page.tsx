@@ -21,15 +21,29 @@ export default async function AdminDashboardPage() {
   await requireStaff();
   const now = parkNow();
 
-  const [upcomingCount, revenue, refundAgg, userCount, activeBlocks, recentBookings, recentRefunds] =
+  const [upcomingCount, revenue, planPaidAgg, duesAgg, refundAgg, userCount, activeBlocks, recentBookings, recentRefunds] =
     await Promise.all([
       prisma.booking.count({ where: { status: "CONFIRMED", date: { gte: now.date } } }),
       // Revenue = money actually collected: confirmed bookings PLUS ones that were
       // paid and later cancelled (a late cancellation with a partial/zero refund
-      // means we kept some/all of the money). Net = this minus refunds.
+      // means we kept some/all of the money). Payment-plan bookings are EXCLUDED
+      // here — their collected amount is the sum of recorded payments (below), not
+      // the full booking total — so a half-paid plan isn't counted as fully paid.
       prisma.booking.aggregate({
-        where: { OR: [{ status: "CONFIRMED" }, { status: "CANCELLED", paymentRef: { not: null } }] },
+        where: {
+          AND: [
+            { OR: [{ status: "CONFIRMED" }, { status: "CANCELLED", paymentRef: { not: null } }] },
+            { OR: [{ reservationId: null }, { reservation: { paymentPlan: false } }] },
+          ],
+        },
         _sum: { totalCents: true },
+      }),
+      // Actual cash collected on payment plans (the ledger).
+      prisma.payment.aggregate({ _sum: { amountCents: true } }),
+      // Outstanding dues = owed minus paid on active (non-cancelled) plans.
+      prisma.reservation.aggregate({
+        where: { paymentPlan: true, status: { not: "CANCELLED" } },
+        _sum: { totalCents: true, paidCents: true },
       }),
       prisma.refundRecord.aggregate({ _sum: { amountCents: true } }),
       prisma.user.count(),
@@ -48,8 +62,9 @@ export default async function AdminDashboardPage() {
       }),
     ]);
 
-  const grossRevenue = revenue._sum.totalCents ?? 0;
+  const grossRevenue = (revenue._sum.totalCents ?? 0) + (planPaidAgg._sum.amountCents ?? 0);
   const totalRefunded = refundAgg._sum.amountCents ?? 0;
+  const outstandingDues = Math.max(0, (duesAgg._sum.totalCents ?? 0) - (duesAgg._sum.paidCents ?? 0));
 
   return (
     <div>
@@ -68,6 +83,7 @@ export default async function AdminDashboardPage() {
       <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <Kpi value={String(upcomingCount)} label="Upcoming confirmed bookings" href="/admin/bookings?filter=upcoming" />
         <Kpi value={formatCents(grossRevenue)} label="Revenue collected (all time)" href="/admin/reports" />
+        <Kpi value={formatCents(outstandingDues)} label="Outstanding dues (payment plans)" href="/admin/installments" />
         <Kpi value={formatCents(totalRefunded)} label="Total refunded" href="/admin/refunds" />
         <Kpi value={String(userCount)} label="Registered users" href="/admin/users" />
         <Kpi value={String(activeBlocks)} label="Active maintenance blocks" href="/admin/maintenance" />

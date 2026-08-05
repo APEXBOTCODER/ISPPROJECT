@@ -35,17 +35,37 @@ export default async function AdminReportsPage({
   const rangeStart = new Date(`${from}T00:00:00`);
   const rangeEnd = new Date(`${nextDay}T00:00:00`);
 
-  const [resources, revenueAgg, bookingCount, cancelledCount, noShowCount, refundAgg, refundCount] =
+  const [resources, revenueAgg, planPaymentsAgg, duesAgg, activePlans, bookingCount, cancelledCount, noShowCount, refundAgg, refundCount] =
     await Promise.all([
       prisma.resource.findMany({ where: { active: true }, orderBy: { sortOrder: "asc" } }),
       // Revenue = money collected: confirmed + paid-then-cancelled (we kept the
-      // non-refunded portion). Net = this minus refunds.
+      // non-refunded portion), EXCLUDING payment-plan bookings — those are counted
+      // by actual payments received (planPaymentsAgg), not their full total.
       prisma.booking.aggregate({
         where: {
-          OR: [{ status: "CONFIRMED" }, { status: "CANCELLED", paymentRef: { not: null } }],
+          AND: [
+            { OR: [{ status: "CONFIRMED" }, { status: "CANCELLED", paymentRef: { not: null } }] },
+            { OR: [{ reservationId: null }, { reservation: { paymentPlan: false } }] },
+          ],
           date: { gte: from, lte: to },
         },
         _sum: { totalCents: true },
+      }),
+      // Cash collected on payment plans, counted by the date each payment was
+      // received (that's when the money actually came in).
+      prisma.payment.aggregate({
+        where: { createdAt: { gte: rangeStart, lt: rangeEnd } },
+        _sum: { amountCents: true },
+      }),
+      // Outstanding dues across active plans — a point-in-time figure, not ranged.
+      prisma.reservation.aggregate({
+        where: { paymentPlan: true, status: { not: "CANCELLED" } },
+        _sum: { totalCents: true, paidCents: true },
+      }),
+      prisma.reservation.findMany({
+        where: { paymentPlan: true, status: { not: "CANCELLED" } },
+        select: { id: true, label: true, totalCents: true, paidCents: true, code: true, user: { select: { name: true, email: true } } },
+        orderBy: { createdAt: "desc" },
       }),
       prisma.booking.count({ where: { status: "CONFIRMED", date: { gte: from, lte: to } } }),
       // Cancellations counted by WHEN they were cancelled (refund-record timestamp),
@@ -61,8 +81,9 @@ export default async function AdminReportsPage({
       prisma.refundRecord.count({ where: { amountCents: { gt: 0 }, createdAt: { gte: rangeStart, lt: rangeEnd } } }),
     ]);
 
-  const revenue = revenueAgg._sum.totalCents ?? 0;
+  const revenue = (revenueAgg._sum.totalCents ?? 0) + (planPaymentsAgg._sum.amountCents ?? 0);
   const refunded = refundAgg._sum.amountCents ?? 0;
+  const outstandingDues = Math.max(0, (duesAgg._sum.totalCents ?? 0) - (duesAgg._sum.paidCents ?? 0));
   const numDays = daysInclusive(from, to);
 
   // Revenue by user (only when specific users are selected).
@@ -70,17 +91,26 @@ export default async function AdminReportsPage({
   let userRevenue: { id: string; name: string; email: string; bookings: number; revenue: number; refunds: number }[] = [];
   let selectedUsers: { id: string; name: string }[] = [];
   if (userIds.length) {
-    const [selUsers, revByUser, refByUser] = await Promise.all([
+    const [selUsers, revByUser, planPayByUser, refByUser] = await Promise.all([
       prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true, email: true } }),
       prisma.booking.groupBy({
         by: ["userId"],
         where: {
           userId: { in: userIds },
-          OR: [{ status: "CONFIRMED" }, { status: "CANCELLED", paymentRef: { not: null } }],
           date: { gte: from, lte: to },
+          AND: [
+            { OR: [{ status: "CONFIRMED" }, { status: "CANCELLED", paymentRef: { not: null } }] },
+            { OR: [{ reservationId: null }, { reservation: { paymentPlan: false } }] },
+          ],
         },
         _sum: { totalCents: true },
         _count: { _all: true },
+      }),
+      // Plan payments this user made in the range (money actually collected).
+      prisma.payment.groupBy({
+        by: ["userId"],
+        where: { userId: { in: userIds }, createdAt: { gte: rangeStart, lt: rangeEnd } },
+        _sum: { amountCents: true },
       }),
       prisma.refundRecord.groupBy({
         by: ["userId"],
@@ -89,13 +119,14 @@ export default async function AdminReportsPage({
       }),
     ]);
     const revMap = new Map(revByUser.map((r) => [r.userId, { sum: r._sum.totalCents ?? 0, count: r._count._all }]));
+    const planPayMap = new Map(planPayByUser.map((r) => [r.userId, r._sum.amountCents ?? 0]));
     const refMap = new Map(refByUser.map((r) => [r.userId, r._sum.amountCents ?? 0]));
     userRevenue = selUsers.map((u) => ({
       id: u.id,
       name: u.name,
       email: u.email,
       bookings: revMap.get(u.id)?.count ?? 0,
-      revenue: revMap.get(u.id)?.sum ?? 0,
+      revenue: (revMap.get(u.id)?.sum ?? 0) + (planPayMap.get(u.id) ?? 0),
       refunds: refMap.get(u.id) ?? 0,
     }));
     selectedUsers = selUsers.map((u) => ({ id: u.id, name: u.name }));
@@ -138,11 +169,62 @@ export default async function AdminReportsPage({
         {stat("Net", formatCents(revenue - refunded))}
         {stat("Bookings", String(bookingCount))}
         {stat("Cancelled", String(cancelledCount))}
-        {stat("No-shows", String(noShowCount))}
+        {stat("Outstanding dues", formatCents(outstandingDues))}
       </div>
       <p className="mt-2 text-xs text-navy/50">
-        Revenue &amp; bookings are counted by session date; refunds &amp; cancellations by the date they were processed.
+        Revenue &amp; bookings are counted by session date; plan payments, refunds &amp; cancellations by the date they were
+        processed. Outstanding dues is a live total across all active payment plans (not limited to the date range).
+        No-shows in range: {noShowCount}.
       </p>
+
+      <section className="mt-10">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="display text-2xl text-navy">Payment plans ({activePlans.length} active)</h2>
+          <a href="/admin/installments" className="text-sm font-semibold text-sky hover:underline">Manage →</a>
+        </div>
+        <p className="mt-1 text-sm text-navy/60">
+          Live view of active installment reservations and what each customer still owes.
+        </p>
+        {activePlans.length === 0 ? (
+          <p className="mt-3 text-sm text-navy/60">No active payment plans.</p>
+        ) : (
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full min-w-[640px] text-left text-sm">
+              <thead>
+                <tr className="border-b border-navy/15 text-xs uppercase text-navy/50">
+                  <th className="py-2 pr-4">Customer</th>
+                  <th className="py-2 pr-4">Reservation</th>
+                  <th className="py-2 pr-4">Total</th>
+                  <th className="py-2 pr-4">Paid</th>
+                  <th className="py-2">Balance</th>
+                </tr>
+              </thead>
+              <tbody>
+                {activePlans.map((p) => (
+                  <tr key={p.id} className="border-b border-navy/5">
+                    <td className="py-2.5 pr-4">
+                      <span className="font-medium text-navy">{p.user.name}</span>
+                      <span className="block text-xs text-navy/50">{p.user.email}</span>
+                    </td>
+                    <td className="py-2.5 pr-4 text-navy/70">{p.label || "—"}{p.code ? <span className="block text-xs text-navy/40">{p.code}</span> : null}</td>
+                    <td className="py-2.5 pr-4">{formatCents(p.totalCents)}</td>
+                    <td className="py-2.5 pr-4 text-navy/60">{formatCents(p.paidCents)}</td>
+                    <td className="py-2.5 font-semibold text-navy">{formatCents(Math.max(0, p.totalCents - p.paidCents))}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t-2 border-navy/15 font-bold text-navy">
+                  <td className="py-2 pr-4" colSpan={2}>Total</td>
+                  <td className="py-2 pr-4">{formatCents(activePlans.reduce((s, p) => s + p.totalCents, 0))}</td>
+                  <td className="py-2 pr-4">{formatCents(activePlans.reduce((s, p) => s + p.paidCents, 0))}</td>
+                  <td className="py-2">{formatCents(outstandingDues)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
+      </section>
 
       <section className="mt-10">
         <h2 className="display text-2xl text-navy">Revenue by user</h2>

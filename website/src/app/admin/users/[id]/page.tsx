@@ -4,8 +4,9 @@ import { requireStaff } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { formatCents } from "@/lib/pricing";
 import { userRefundCapCents } from "@/lib/reservations";
+import { userAccountSummary, PAYMENT_METHODS } from "@/lib/installments";
 import ConfirmButton from "@/components/ConfirmButton";
-import { setUserRole, setManualVerified, setUserActive, resetUserPassword, updateUserProfile, emailInvoice, deleteUser, resetUserTwoFactor } from "../actions";
+import { setUserRole, setManualVerified, setUserActive, resetUserPassword, updateUserProfile, emailInvoice, deleteUser, resetUserTwoFactor, recordUserPayment, fixReservationPaid } from "../actions";
 
 export const metadata = { title: "Admin · User" };
 export const dynamic = "force-dynamic";
@@ -23,7 +24,7 @@ export default async function AdminUserDetailPage({
   const { id } = await params;
   const { ok, error } = await searchParams;
 
-  const [user, reservations, standalone, refunds, cap, waiverCount] = await Promise.all([
+  const [user, reservations, standalone, refunds, cap, waiverCount, account, payments] = await Promise.all([
     prisma.user.findUnique({ where: { id } }),
     prisma.reservation.findMany({
       where: { kind: "BOOKING", userId: id },
@@ -45,6 +46,13 @@ export default async function AdminUserDetailPage({
     }),
     userRefundCapCents(id),
     prisma.waiverSignature.count({ where: { userId: id } }),
+    userAccountSummary(id),
+    prisma.payment.findMany({
+      where: { userId: id },
+      include: { staff: { select: { name: true } }, reservation: { select: { code: true, label: true } } },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+    }),
   ]);
 
   if (!user) notFound();
@@ -155,6 +163,86 @@ export default async function AdminUserDetailPage({
             <p className="mt-2 text-xs text-navy/50">Admin-only.</p>
           )}
         </div>
+      </section>
+
+      {/* Account & payments */}
+      <section className="mt-6 rounded-2xl border border-navy/10 p-5">
+        <h2 className="display text-xl text-navy">Account &amp; payments</h2>
+        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+          <div className="rounded-xl bg-navy p-4 text-white">
+            <div className="text-xs text-white/60">
+              {account.balanceCents > 0 ? "Balance due" : account.balanceCents < 0 ? "Advance credit" : "Account settled"}
+            </div>
+            <div className="mt-1 text-2xl font-bold">
+              {account.balanceCents === 0 ? "$0.00" : formatCents(Math.abs(account.balanceCents))}
+            </div>
+          </div>
+          <div className="rounded-xl border border-navy/10 p-4">
+            <div className="text-xs uppercase tracking-wide text-navy/50">Total booked</div>
+            <div className="mt-1 text-lg font-bold text-navy">{formatCents(account.billedCents)}</div>
+          </div>
+          <div className="rounded-xl border border-navy/10 p-4">
+            <div className="text-xs uppercase tracking-wide text-navy/50">
+              Paid{account.advanceCents > 0 ? ` · incl ${formatCents(account.advanceCents)} advance` : ""}
+            </div>
+            <div className="mt-1 text-lg font-bold text-navy">{formatCents(account.paidCents)}</div>
+          </div>
+        </div>
+
+        <form action={recordUserPayment} className="mt-4 flex flex-wrap items-end gap-2">
+          <input type="hidden" name="userId" value={user.id} />
+          <div>
+            <label className="block text-[11px] font-semibold uppercase text-navy/50">Apply to</label>
+            <select name="target" className="mt-1 rounded-md border border-navy/20 px-2 py-2 text-sm">
+              <option value="advance">Account advance / credit</option>
+              {reservations
+                .filter((r) => r.status !== "CANCELLED")
+                .map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {(r.code ?? r.label ?? "Reservation")} — bal {formatCents(Math.max(0, r.totalCents - r.paidCents))}
+                  </option>
+                ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-[11px] font-semibold uppercase text-navy/50">Amount</label>
+            <input name="amount" inputMode="decimal" required placeholder="$" className="mt-1 w-28 rounded-md border border-navy/20 px-3 py-2 text-sm" />
+          </div>
+          <div>
+            <label className="block text-[11px] font-semibold uppercase text-navy/50">Method</label>
+            <select name="method" className="mt-1 rounded-md border border-navy/20 px-2 py-2 text-sm">
+              {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m.charAt(0) + m.slice(1).toLowerCase()}</option>)}
+            </select>
+          </div>
+          <input name="note" placeholder="Note (optional)" className="rounded-md border border-navy/20 px-3 py-2 text-sm" />
+          <button className="btn-brand rounded-md px-4 py-2 text-sm font-bold uppercase">Record payment</button>
+        </form>
+        <p className="mt-1 text-xs text-navy/50">
+          &ldquo;Account advance / credit&rdquo; is money paid ahead — it offsets what they owe as they book.
+        </p>
+
+        {payments.length > 0 && (
+          <div className="mt-4">
+            <h3 className="text-sm font-semibold uppercase text-navy/60">Payment history</h3>
+            <ul className="mt-2 space-y-1 text-sm">
+              {payments.map((p) => (
+                <li key={p.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-navy/10 px-3 py-1.5">
+                  <span>
+                    <strong className="text-navy">{formatCents(p.amountCents)}</strong>
+                    <span className="ml-2 text-xs text-navy/50">
+                      {p.method.toLowerCase()} · {p.kind.toLowerCase()}
+                      {p.reservation?.code ? ` · ${p.reservation.code}` : p.kind === "ADVANCE" ? " · account credit" : ""}
+                      {p.note ? ` · ${p.note}` : ""}
+                    </span>
+                  </span>
+                  <span className="whitespace-nowrap text-xs text-navy/40">
+                    {p.createdAt.toISOString().slice(0, 10)} · {p.staff.name}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </section>
 
       {/* Edit profile */}
@@ -338,12 +426,20 @@ export default async function AdminUserDetailPage({
           <p className="mt-2 text-sm text-navy/60">No reservations.</p>
         ) : (
           <ul className="mt-3 space-y-3">
-            {reservations.map((r) => (
+            {reservations.map((r) => {
+              const bal = Math.max(0, r.totalCents - r.paidCents);
+              return (
               <li key={r.id} className="rounded-xl border border-navy/10 p-4 text-sm">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="font-semibold text-navy">{r.label || "Reservation"} · {formatCents(r.totalCents)}</span>
+                  <span className="font-semibold text-navy">
+                    {r.code && <span className="mr-2 rounded bg-navy/5 px-1.5 py-0.5 font-mono text-xs text-navy/70">{r.code}</span>}
+                    {r.label || "Reservation"} · {formatCents(r.totalCents)}
+                    {r.paymentPlan && <span className="ml-2 rounded-full bg-sky/10 px-2 py-0.5 text-xs font-semibold text-sky">Plan</span>}
+                  </span>
                   <span className="text-xs text-navy/50">
-                    {r.status}{r.refundedCents > 0 ? ` · refunded ${formatCents(r.refundedCents)}` : ""}
+                    {r.status} · paid {formatCents(r.paidCents)}
+                    {bal > 0 && r.status !== "CANCELLED" ? ` · bal ${formatCents(bal)}` : ""}
+                    {r.refundedCents > 0 ? ` · refunded ${formatCents(r.refundedCents)}` : ""}
                   </span>
                 </div>
                 <ul className="mt-2 space-y-1 text-navy/70">
@@ -354,8 +450,20 @@ export default async function AdminUserDetailPage({
                     </li>
                   ))}
                 </ul>
+                {isAdmin && !r.paymentPlan && r.status !== "CANCELLED" && (
+                  <form action={fixReservationPaid} className="mt-2 flex items-end gap-2">
+                    <input type="hidden" name="userId" value={user.id} />
+                    <input type="hidden" name="reservationId" value={r.id} />
+                    <label className="text-[11px] uppercase text-navy/40">
+                      Correct paid $
+                      <input name="amount" inputMode="decimal" defaultValue={(r.paidCents / 100).toFixed(2)} className="ml-1 w-24 rounded border border-navy/20 px-2 py-1 text-xs" />
+                    </label>
+                    <button className="rounded border border-navy/20 px-2 py-1 text-xs font-semibold text-navy hover:bg-navy/5">Set</button>
+                  </form>
+                )}
               </li>
-            ))}
+              );
+            })}
           </ul>
         )}
       </section>

@@ -3,6 +3,7 @@ import { config } from "@/lib/config";
 import { getSettings } from "@/lib/settings";
 import { parkNow } from "@/lib/availability";
 import { buildInvoicePdf } from "@/lib/invoicePdf";
+import { userAccountSummary } from "@/lib/installments";
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -24,14 +25,15 @@ export function normalizeRange(fromRaw?: string | null, toRaw?: string | null) {
 /** Build a user's invoice PDF for a date range. Returns null if no such user. */
 export async function generateUserInvoice(userId: string, fromRaw?: string | null, toRaw?: string | null) {
   const { from, to, issuedOn } = normalizeRange(fromRaw, toRaw);
-  const [user, bookings, settings] = await Promise.all([
+  const [user, bookings, settings, account] = await Promise.all([
     prisma.user.findUnique({ where: { id: userId }, select: { name: true, email: true } }),
     prisma.booking.findMany({
       where: { userId, status: "CONFIRMED", date: { gte: from, lte: to } },
-      include: { resource: { select: { name: true } } },
+      include: { resource: { select: { name: true } }, reservation: { select: { code: true } } },
       orderBy: [{ date: "asc" }, { startHour: "asc" }],
     }),
     getSettings(),
+    userAccountSummary(userId),
   ]);
   if (!user) return null;
 
@@ -48,7 +50,13 @@ export async function generateUserInvoice(userId: string, fromRaw?: string | nul
       totalCents: b.totalCents,
       refundedCents: b.refundedCents,
       resourceName: b.resource.name,
+      code: b.reservation?.code ?? null,
     })),
+    account: {
+      billedCents: account.billedCents,
+      paidCents: account.paidCents,
+      balanceCents: account.balanceCents,
+    },
     contactEmail: settings["contact.email"],
     zelleEmail: settings["payment.zelleEmail"],
     zelleName: settings["payment.zelleName"],

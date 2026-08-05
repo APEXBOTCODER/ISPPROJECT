@@ -34,12 +34,28 @@ export async function refundBookingAdvanced(
     reason: string;
     staffId: string;
     scope?: RefundScope;
+    // Payment-plan reservations are blocked from cancellation/refund by default;
+    // the admin force-cancel path sets this to true to override.
+    allowPaymentPlan?: boolean;
   }
 ): Promise<RefundOutcome> {
   const booking = await prisma.booking.findUnique({ where: { id: bookingId } });
   if (!booking) return { ok: false, error: "Booking not found." };
   if (booking.status === "BLOCKED") {
     return { ok: false, error: "Maintenance blocks aren't refundable." };
+  }
+  if (booking.reservationId && !opts.allowPaymentPlan) {
+    const res = await prisma.reservation.findUnique({
+      where: { id: booking.reservationId },
+      select: { paymentPlan: true },
+    });
+    if (res?.paymentPlan) {
+      return {
+        ok: false,
+        error:
+          "This is a payment-plan reservation — it can't be cancelled or refunded here. An admin can override from the Installments page.",
+      };
+    }
   }
   if (booking.status === "CANCELLED" && !((booking.totalCents - booking.refundedCents) > 0)) {
     return { ok: false, error: "This booking is already fully refunded." };
@@ -173,6 +189,14 @@ export async function refundReservationPolicy(
   if (!reservation) {
     return { ok: false, refundCents: 0, count: 0, errors: ["Reservation not found."] };
   }
+  if (reservation.paymentPlan) {
+    return {
+      ok: false,
+      refundCents: 0,
+      count: 0,
+      errors: ["Payment-plan reservations can't be cancelled. Please contact us to make changes."],
+    };
+  }
 
   const policy = await getBookingPolicy();
   let refundCents = 0;
@@ -205,7 +229,15 @@ export async function refundReservationPolicy(
 export async function userRefundCapCents(userId: string): Promise<number> {
   const [paid, refunded] = await Promise.all([
     prisma.booking.aggregate({
-      where: { userId, paymentRef: { not: null }, status: { not: "BLOCKED" } },
+      // Exclude payment-plan bookings: money paid on a plan is tracked via the
+      // Payment ledger (paidCents), not the booking's full total, so counting
+      // their totalCents here would overstate the refundable balance.
+      where: {
+        userId,
+        paymentRef: { not: null },
+        status: { not: "BLOCKED" },
+        OR: [{ reservationId: null }, { reservation: { paymentPlan: false } }],
+      },
       _sum: { totalCents: true },
     }),
     prisma.refundRecord.aggregate({

@@ -7,7 +7,16 @@ import { requireAdmin, requireStaff } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { config } from "@/lib/config";
 import { sendEmail } from "@/lib/email";
+import { formatCents } from "@/lib/pricing";
 import { generateUserInvoice, invoiceFilename } from "@/lib/invoice";
+import { recordPayment, recordAdvancePayment, setReservationPaid } from "@/lib/installments";
+
+/** Parse a dollars string ("125", "125.50") to integer cents, or null if invalid. */
+function dollarsToCents(raw: string): number | null {
+  const s = raw.trim();
+  if (!s || !/^\d+(\.\d{1,2})?$/.test(s)) return null;
+  return Math.round(parseFloat(s) * 100);
+}
 
 const roleSchema = z.enum(["CUSTOMER", "STAFF", "ADMIN"]);
 const passwordSchema = z.string().min(8, "Temporary password must be at least 8 characters.").max(100);
@@ -220,6 +229,49 @@ export async function resetUserTwoFactor(formData: FormData) {
     data: { totpEnabled: false, totpSecret: null, totpBackupCodes: null },
   });
   back(userId, { ok: `Two-factor reset for ${user.name} — ask them to set it up again from My Account → Security.` });
+}
+
+/**
+ * Record a payment on a user's account. Staff-only. Two modes:
+ *  - "advance": an account-level prepayment/credit (no specific booking).
+ *  - a reservationId: a payment against that reservation (deposit/installment).
+ */
+export async function recordUserPayment(formData: FormData) {
+  const staff = await requireStaff();
+  const userId = String(formData.get("userId") ?? "");
+  if (!userId) redirect("/admin/users");
+
+  const cents = dollarsToCents(String(formData.get("amount") ?? ""));
+  if (cents === null || cents <= 0) back(userId, { error: "Enter a valid dollar amount." });
+  const method = String(formData.get("method") ?? "ZELLE");
+  const note = String(formData.get("note") ?? "").trim() || null;
+  const target = String(formData.get("target") ?? "advance"); // "advance" | reservationId
+
+  const result =
+    target === "advance"
+      ? await recordAdvancePayment({ userId, amountCents: cents, method, note, staffId: staff.id })
+      : await recordPayment({ reservationId: target, amountCents: cents, method, note, staffId: staff.id });
+  if (!result.ok) back(userId, { error: result.error });
+  back(userId, {
+    ok:
+      target === "advance"
+        ? `Recorded ${formatCents(result.amountCents)} advance/credit.`
+        : `Recorded ${formatCents(result.amountCents)} payment.`,
+  });
+}
+
+/** Correct how much has been paid on a NON-plan reservation. ADMIN-only. */
+export async function fixReservationPaid(formData: FormData) {
+  await requireAdmin();
+  const userId = String(formData.get("userId") ?? "");
+  if (!userId) redirect("/admin/users");
+  const reservationId = String(formData.get("reservationId") ?? "");
+  const cents = dollarsToCents(String(formData.get("amount") ?? ""));
+  if (cents === null) back(userId, { error: "Enter a valid dollar amount." });
+
+  const result = await setReservationPaid({ reservationId, amountCents: cents });
+  if (!result.ok) back(userId, { error: result.error });
+  back(userId, { ok: `Updated paid amount to ${formatCents(result.paidCents)}.` });
 }
 
 /** Manually set/clear a user's email verification. ADMIN-only. */
