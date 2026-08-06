@@ -70,11 +70,19 @@ export async function createAdminReservation(formData: FormData) {
     fail(returnTo, "Enter a valid rate per hour, or leave it blank for standard pricing.");
   }
 
+  // Backdate mode: record a past booking that was missed online (e.g. a walk-in
+  // who paid or still owes). Past dates are allowed and the "future window"
+  // checks are relaxed to a 2-year lower bound.
+  const backdate = String(formData.get("backdate") ?? "") === "on";
+
   const policy = await getBookingPolicy();
   const now = parkNow();
   const maxDate = new Date(`${now.date}T00:00:00`);
   maxDate.setDate(maxDate.getDate() + policy.advanceBookingDays);
   const maxDateStr = maxDate.toISOString().slice(0, 10);
+  const minDate = new Date(`${now.date}T00:00:00`);
+  minDate.setDate(minDate.getDate() - 731);
+  const minDateStr = minDate.toISOString().slice(0, 10);
 
   const resourceIds = Array.from(new Set(segments.map((s) => s.resourceId)));
   const resources = await prisma.resource.findMany({ where: { id: { in: resourceIds } } });
@@ -96,12 +104,16 @@ export async function createAdminReservation(formData: FormData) {
     const hours = [...seg.hours].sort((a, b) => a - b);
     if (!isContiguous(hours)) fail(returnTo, "Each day must be consecutive hours.");
     // No per-segment hour cap for admin bookings (staff can book any length).
-    if (
+    const badHours = hours[0] < resource.openHour || hours[hours.length - 1] >= resource.closeHour;
+    if (backdate) {
+      if (seg.date > now.date || seg.date < minDateStr || badHours) {
+        fail(returnTo, `A time on ${seg.date} is outside the allowed range (past bookings only, up to 2 years back).`);
+      }
+    } else if (
       seg.date < now.date ||
       seg.date > maxDateStr ||
       (seg.date === now.date && hours[0] <= now.hour) ||
-      hours[0] < resource.openHour ||
-      hours[hours.length - 1] >= resource.closeHour
+      badHours
     ) {
       fail(returnTo, `A time on ${seg.date} is outside the bookable window.`);
     }
@@ -126,18 +138,31 @@ export async function createAdminReservation(formData: FormData) {
   // Payment plan: not a comp — the customer owes the total and pays in
   // installments. An optional deposit is recorded now. Slots still lock (the
   // admin flow always confirms), but revenue counts only what's actually paid.
-  const isPlan = String(formData.get("paymentPlan") ?? "") === "on";
+  // A backdated booking is either paid in full or still owed ("due"). A "due"
+  // one is recorded as an owed (plan-style) reservation so it shows as a balance
+  // and is excluded from collected revenue until it's actually paid.
+  const pastDue = backdate && String(formData.get("pastPaid") ?? "paid") === "due";
+  const isPlan = backdate ? pastDue : String(formData.get("paymentPlan") ?? "") === "on";
   const methodRaw = String(formData.get("method") ?? "ZELLE").toUpperCase();
   const method = ["ZELLE", "CASH", "CARD", "CHECK", "OTHER"].includes(methodRaw) ? methodRaw : "ZELLE";
   let depositCents = 0;
-  if (isPlan) {
+  if (isPlan && !backdate) {
     const dRaw = String(formData.get("deposit") ?? "").trim();
     if (dRaw) {
       const c = Math.round(parseFloat(dRaw) * 100);
       if (!Number.isNaN(c) && c > 0) depositCents = Math.min(c, grandTotal);
     }
   }
-  const ref = isPlan ? `PLAN-${randomUUID()}` : `ADMIN-${randomUUID()}`;
+  // How much is paid at creation: backdated → full if paid, 0 if due; otherwise
+  // a plan pays its deposit and a normal comp is paid in full.
+  const paidValue = backdate ? (pastDue ? 0 : grandTotal) : isPlan ? depositCents : grandTotal;
+  const ref = backdate
+    ? pastDue
+      ? null
+      : `ADMIN-PAST-${randomUUID()}`
+    : isPlan
+      ? `PLAN-${randomUUID()}`
+      : `ADMIN-${randomUUID()}`;
   const code = await uniqueCode();
 
   let reservationId: string;
@@ -153,9 +178,10 @@ export async function createAdminReservation(formData: FormData) {
           status: "CONFIRMED",
           paymentRef: ref,
           paymentPlan: isPlan,
-          // Non-plan admin bookings are comps counted as paid in full; plans owe.
-          paidCents: isPlan ? depositCents : grandTotal,
-          notes: `Created by staff (${staff.email})`,
+          paidCents: paidValue,
+          notes: backdate
+            ? `Past booking recorded by staff (${staff.email})`
+            : `Created by staff (${staff.email})`,
         },
       });
       for (const seg of prepared) {
@@ -209,36 +235,40 @@ export async function createAdminReservation(formData: FormData) {
     throw error;
   }
 
-  await sendEmail({
-    to: customer.email,
-    subject: `Booking confirmed — Infinity Sports Park`,
-    text: [
-      `Hi ${customer.name},`,
-      ``,
-      `Our staff booked the following for you:`,
-      ...prepared.map((s) => `  • ${s.resourceName} — ${s.date}, ${s.startHour}:00–${s.endHour}:00`),
-      ``,
-      `Total: ${formatCents(grandTotal)}`,
-      ...(isPlan
-        ? [
-            `Deposit received: ${formatCents(depositCents)}`,
-            `Balance to pay: ${formatCents(grandTotal - depositCents)}`,
-            ``,
-            `This is a payment plan — you can settle the balance in installments. We'll email a receipt each time a payment is recorded.`,
-          ]
-        : []),
-      ``,
-      `Manage it any time: ${config.siteUrl}/dashboard`,
-    ].join("\n"),
-  });
+  // Don't email a "booking confirmed" for a backdated (already-past) record.
+  if (!backdate) {
+    await sendEmail({
+      to: customer.email,
+      subject: `Booking confirmed — Infinity Sports Park`,
+      text: [
+        `Hi ${customer.name},`,
+        ``,
+        `Our staff booked the following for you:`,
+        ...prepared.map((s) => `  • ${s.resourceName} — ${s.date}, ${s.startHour}:00–${s.endHour}:00`),
+        ``,
+        `Total: ${formatCents(grandTotal)}`,
+        ...(isPlan
+          ? [
+              `Deposit received: ${formatCents(depositCents)}`,
+              `Balance to pay: ${formatCents(grandTotal - depositCents)}`,
+              ``,
+              `This is a payment plan — you can settle the balance in installments. We'll email a receipt each time a payment is recorded.`,
+            ]
+          : []),
+        ``,
+        `Manage it any time: ${config.siteUrl}/dashboard`,
+      ].join("\n"),
+    });
+  }
 
-  redirect(
-    `/admin/bookings?ok=${encodeURIComponent(
-      isPlan
-        ? `Payment plan created for ${customer.name} — ${formatCents(grandTotal - depositCents)} balance. Manage it under Installments.`
-        : `Booked ${prepared.length} session(s) for ${customer.name}.`
-    )}`
-  );
+  const okMsg = backdate
+    ? pastDue
+      ? `Recorded past booking for ${customer.name} — ${formatCents(grandTotal)} due. Track it on their account / under Installments.`
+      : `Recorded past booking for ${customer.name} — ${formatCents(grandTotal)} paid.`
+    : isPlan
+      ? `Payment plan created for ${customer.name} — ${formatCents(grandTotal - depositCents)} balance. Manage it under Installments.`
+      : `Booked ${prepared.length} session(s) for ${customer.name}.`;
+  redirect(`/admin/bookings?ok=${encodeURIComponent(okMsg)}`);
 }
 
 function addDays(date: string, n: number): string {

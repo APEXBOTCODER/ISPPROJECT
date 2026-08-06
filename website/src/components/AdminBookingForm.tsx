@@ -49,6 +49,9 @@ export default function AdminBookingForm({
   const maxD = new Date();
   maxD.setDate(maxD.getDate() + maxAdvanceDays);
   const maxDate = maxD.toISOString().slice(0, 10);
+  const pastD = new Date();
+  pastD.setDate(pastD.getDate() - 365);
+  const pastMin = pastD.toISOString().slice(0, 10);
 
   const [days, setDays] = useState<string[]>([]);
   const [fromHour, setFromHour] = useState(8);
@@ -61,6 +64,9 @@ export default function AdminBookingForm({
   const [deposit, setDeposit] = useState("");
   const [method, setMethod] = useState("ZELLE");
   const PLAN_METHODS = ["ZELLE", "CASH", "CARD", "CHECK", "OTHER"]; // mirrors lib/installments PAYMENT_METHODS
+  // Backdate mode: record a past booking that was missed online.
+  const [backdate, setBackdate] = useState(false);
+  const [pastPaid, setPastPaid] = useState<"paid" | "due">("paid");
   const [notice, setNotice] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -108,7 +114,11 @@ export default function AdminBookingForm({
           if (cartKeys.has(`${r.id}:${date}`)) return { r, date, ok: false, dup: true, subtotal: 0 };
           const slots = await fetchDayAvailability(r.id, date);
           const byHour = new Map(slots.map((s) => [s.hour, s]));
-          const ok = hours.every((h) => byHour.get(h)?.status === "free");
+          // Past slots are "past", not "free" — accept them when backdating.
+          const ok = hours.every((h) => {
+            const st = byHour.get(h)?.status;
+            return st === "free" || (backdate && st === "past");
+          });
           const subtotal = ok ? hours.reduce((sum, h) => sum + (byHour.get(h)?.priceCents ?? 0), 0) : 0;
           return { r, date, ok, dup: false, subtotal };
         })
@@ -169,8 +179,19 @@ export default function AdminBookingForm({
 
         <section>
           <h2 className="display text-xl text-navy">3 · Days &amp; hours</h2>
+          <label className="mt-2 flex items-center gap-2 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900 ring-1 ring-amber-200">
+            <input
+              type="checkbox"
+              checked={backdate}
+              onChange={(e) => { setBackdate(e.target.checked); setDays([]); setSegments([]); setNotice(null); }}
+              className="h-4 w-4"
+            />
+            <span>
+              <strong>Record a past booking</strong> (backdate a missed reservation) — lets you pick past days.
+            </span>
+          </label>
           <div className="mt-3 flex flex-col gap-4 sm:flex-row sm:items-start">
-            <MultiDayCalendar value={days} onChange={setDays} minDate={today} maxDate={maxDate} />
+            <MultiDayCalendar value={days} onChange={setDays} minDate={backdate ? pastMin : today} maxDate={backdate ? today : maxDate} />
             <div className="space-y-3">
               {selectedResources.length === 0 ? (
                 <p className="max-w-xs text-sm text-navy/50">Select one or more grounds above.</p>
@@ -244,37 +265,61 @@ export default function AdminBookingForm({
               <input name="label" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Note / organization (optional)"
                 className="w-full rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm text-white placeholder:text-white/40" />
 
-              <label className="flex items-center gap-2 rounded-md bg-white/5 px-3 py-2 text-sm">
-                <input type="checkbox" name="paymentPlan" checked={plan} onChange={(e) => setPlan(e.target.checked)} className="h-4 w-4" />
-                <span>Payment plan <span className="text-white/50">(pay by installments)</span></span>
-              </label>
-              {plan && (
-                <div className="space-y-2 rounded-md bg-white/5 p-2">
-                  <label className="block text-xs text-white/70">
-                    Deposit received now <span className="text-white/40">(optional)</span>
-                    <div className="mt-1 flex items-center gap-1">
-                      <span className="text-white/60">$</span>
-                      <input name="deposit" type="number" step="0.01" min="0" value={deposit} onChange={(e) => setDeposit(e.target.value)}
-                        placeholder="e.g. 200" className="w-full rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm text-white placeholder:text-white/40" />
-                    </div>
+              <input type="hidden" name="backdate" value={backdate ? "on" : ""} />
+
+              {backdate ? (
+                <div className="space-y-1 rounded-md bg-white/5 p-2 text-sm">
+                  <div className="font-semibold text-white/80">Payment</div>
+                  <label className="flex items-center gap-2">
+                    <input type="radio" name="pastPaid" value="paid" checked={pastPaid === "paid"} onChange={() => setPastPaid("paid")} className="h-4 w-4" />
+                    Paid in full
                   </label>
-                  <label className="block text-xs text-white/70">
-                    Method
-                    <select name="method" value={method} onChange={(e) => setMethod(e.target.value)}
-                      className="mt-1 block w-full rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm text-white">
-                      {PLAN_METHODS.map((m) => <option key={m} value={m} className="text-navy">{m.charAt(0) + m.slice(1).toLowerCase()}</option>)}
-                    </select>
+                  <label className="flex items-center gap-2">
+                    <input type="radio" name="pastPaid" value="due" checked={pastPaid === "due"} onChange={() => setPastPaid("due")} className="h-4 w-4" />
+                    Unpaid — balance due
                   </label>
-                  <p className="text-xs text-white/60">Slots lock immediately; the balance is tracked under Installments.</p>
                 </div>
+              ) : (
+                <>
+                  <label className="flex items-center gap-2 rounded-md bg-white/5 px-3 py-2 text-sm">
+                    <input type="checkbox" name="paymentPlan" checked={plan} onChange={(e) => setPlan(e.target.checked)} className="h-4 w-4" />
+                    <span>Payment plan <span className="text-white/50">(pay by installments)</span></span>
+                  </label>
+                  {plan && (
+                    <div className="space-y-2 rounded-md bg-white/5 p-2">
+                      <label className="block text-xs text-white/70">
+                        Deposit received now <span className="text-white/40">(optional)</span>
+                        <div className="mt-1 flex items-center gap-1">
+                          <span className="text-white/60">$</span>
+                          <input name="deposit" type="number" step="0.01" min="0" value={deposit} onChange={(e) => setDeposit(e.target.value)}
+                            placeholder="e.g. 200" className="w-full rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm text-white placeholder:text-white/40" />
+                        </div>
+                      </label>
+                      <label className="block text-xs text-white/70">
+                        Method
+                        <select name="method" value={method} onChange={(e) => setMethod(e.target.value)}
+                          className="mt-1 block w-full rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm text-white">
+                          {PLAN_METHODS.map((m) => <option key={m} value={m} className="text-navy">{m.charAt(0) + m.slice(1).toLowerCase()}</option>)}
+                        </select>
+                      </label>
+                      <p className="text-xs text-white/60">Slots lock immediately; the balance is tracked under Installments.</p>
+                    </div>
+                  )}
+                </>
               )}
 
               <button type="submit" disabled={!canSubmit} className="btn-brand w-full rounded-md px-4 py-3 text-sm uppercase disabled:opacity-50">
-                {submitting ? "Booking…" : plan ? `Create plan ${money(grandTotal)}` : `Confirm booking ${money(grandTotal)}`}
+                {submitting ? "Saving…" : backdate ? "Record past booking" : plan ? `Create plan ${money(grandTotal)}` : `Confirm booking ${money(grandTotal)}`}
               </button>
               {!customer && <p className="text-xs text-amber-200">Select a customer first.</p>}
               <p className="text-xs text-white/60">
-                {plan ? "Payment plan — customer owes the total; record installments under Installments." : "Comp booking — no payment is charged."}
+                {backdate
+                  ? pastPaid === "due"
+                    ? "Past booking — recorded as balance due on the customer's account."
+                    : "Past booking — recorded as paid in full."
+                  : plan
+                    ? "Payment plan — customer owes the total; record installments under Installments."
+                    : "Comp booking — no payment is charged."}
               </p>
             </form>
           </>
