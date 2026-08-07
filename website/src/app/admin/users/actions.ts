@@ -9,7 +9,7 @@ import { config } from "@/lib/config";
 import { sendEmail } from "@/lib/email";
 import { formatCents } from "@/lib/pricing";
 import { generateUserInvoice, invoiceFilename } from "@/lib/invoice";
-import { recordPayment, recordAdvancePayment, setReservationPaid } from "@/lib/installments";
+import { recordPayment, recordAdvancePayment, setReservationPaid, applyAdvanceToReservation, deletePayment } from "@/lib/installments";
 
 /** Parse a dollars string ("125", "125.50") to integer cents, or null if invalid. */
 function dollarsToCents(raw: string): number | null {
@@ -246,6 +246,14 @@ export async function recordUserPayment(formData: FormData) {
   const method = String(formData.get("method") ?? "ZELLE");
   const note = String(formData.get("note") ?? "").trim() || null;
   const target = String(formData.get("target") ?? "advance"); // "advance" | reservationId
+  const source = String(formData.get("source") ?? "new"); // "new" | "advance"
+
+  // Pay a reservation's balance FROM the customer's advance credit.
+  if (target !== "advance" && source === "advance") {
+    const applied = await applyAdvanceToReservation({ reservationId: target, amountCents: cents, staffId: staff.id });
+    if (!applied.ok) back(userId, { error: applied.error });
+    back(userId, { ok: `Applied ${formatCents(applied.amountCents)} from advance balance. Any remaining balance stays due.` });
+  }
 
   const result =
     target === "advance"
@@ -258,6 +266,19 @@ export async function recordUserPayment(formData: FormData) {
         ? `Recorded ${formatCents(result.amountCents)} advance/credit.`
         : `Recorded ${formatCents(result.amountCents)} payment.`,
   });
+}
+
+/** Reverse/delete a recorded payment to fix a mistake. ADMIN-only. */
+export async function removePayment(formData: FormData) {
+  await requireAdmin();
+  const userId = String(formData.get("userId") ?? "");
+  if (!userId) redirect("/admin/users");
+  const paymentId = String(formData.get("paymentId") ?? "");
+  if (!paymentId) back(userId, { error: "Missing payment." });
+
+  const result = await deletePayment(paymentId);
+  if (!result.ok) back(userId, { error: result.error });
+  back(userId, { ok: `Removed ${formatCents(result.amountCents)} payment.` });
 }
 
 /** Correct how much has been paid on a NON-plan reservation. ADMIN-only. */

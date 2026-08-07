@@ -21,29 +21,27 @@ export default async function AdminDashboardPage() {
   await requireStaff();
   const now = parkNow();
 
-  const [upcomingCount, revenue, planPaidAgg, duesAgg, refundAgg, userCount, activeBlocks, recentBookings, recentRefunds] =
+  const [upcomingCount, resAgg, advDepAgg, creditAgg, standaloneAgg, refundAgg, userCount, activeBlocks, recentBookings, recentRefunds] =
     await Promise.all([
       prisma.booking.count({ where: { status: "CONFIRMED", date: { gte: now.date } } }),
-      // Revenue = money actually collected: confirmed bookings PLUS ones that were
-      // paid and later cancelled (a late cancellation with a partial/zero refund
-      // means we kept some/all of the money). Payment-plan bookings are EXCLUDED
-      // here — their collected amount is the sum of recorded payments (below), not
-      // the full booking total — so a half-paid plan isn't counted as fully paid.
+      // Revenue is based on the amount ACTUALLY PAID (paidCents) on each
+      // non-cancelled reservation — not the full booking price — so partial
+      // payments, corrections, and advances are all reflected correctly. Dues =
+      // what's still owed across those reservations.
+      prisma.reservation.aggregate({
+        where: { kind: "BOOKING", status: { not: "CANCELLED" } },
+        _sum: { paidCents: true, totalCents: true },
+      }),
+      // Advance deposits received, and credit since applied to bookings.
+      prisma.payment.aggregate({ where: { kind: "ADVANCE" }, _sum: { amountCents: true } }),
+      prisma.payment.aggregate({ where: { kind: "CREDIT" }, _sum: { amountCents: true } }),
+      // Legacy standalone bookings (no reservation) — treated as paid when confirmed.
       prisma.booking.aggregate({
         where: {
-          AND: [
-            { OR: [{ status: "CONFIRMED" }, { status: "CANCELLED", paymentRef: { not: null } }] },
-            { OR: [{ reservationId: null }, { reservation: { paymentPlan: false } }] },
-          ],
+          reservationId: null,
+          OR: [{ status: "CONFIRMED" }, { status: "CANCELLED", paymentRef: { not: null } }],
         },
         _sum: { totalCents: true },
-      }),
-      // Actual cash collected on payment plans (the ledger).
-      prisma.payment.aggregate({ _sum: { amountCents: true } }),
-      // Outstanding dues = owed minus paid on active (non-cancelled) plans.
-      prisma.reservation.aggregate({
-        where: { paymentPlan: true, status: { not: "CANCELLED" } },
-        _sum: { totalCents: true, paidCents: true },
       }),
       prisma.refundRecord.aggregate({ _sum: { amountCents: true } }),
       prisma.user.count(),
@@ -62,9 +60,14 @@ export default async function AdminDashboardPage() {
       }),
     ]);
 
-  const grossRevenue = (revenue._sum.totalCents ?? 0) + (planPaidAgg._sum.amountCents ?? 0);
+  // Cash collected = paid toward reservations + advance on file (deposits −
+  // credit applied) + legacy standalone bookings. Applied credit nets out (it's
+  // in paidCents and subtracted via the advance term), so nothing double-counts.
+  const advanceOnFile = (advDepAgg._sum.amountCents ?? 0) - (creditAgg._sum.amountCents ?? 0);
+  const grossRevenue =
+    (resAgg._sum.paidCents ?? 0) + advanceOnFile + (standaloneAgg._sum.totalCents ?? 0);
   const totalRefunded = refundAgg._sum.amountCents ?? 0;
-  const outstandingDues = Math.max(0, (duesAgg._sum.totalCents ?? 0) - (duesAgg._sum.paidCents ?? 0));
+  const outstandingDues = Math.max(0, (resAgg._sum.totalCents ?? 0) - (resAgg._sum.paidCents ?? 0));
 
   return (
     <div>

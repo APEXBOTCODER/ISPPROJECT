@@ -176,7 +176,7 @@ export default async function DashboardPage({
               <h2 className="display text-xl text-navy">Account</h2>
               <p className="mt-1 text-sm text-navy/60">
                 Booked {formatCents(account.billedCents)} · Paid {formatCents(account.paidCents)}
-                {account.advanceCents > 0 ? ` (incl. ${formatCents(account.advanceCents)} advance)` : ""}
+                {account.advanceCents > 0 ? ` · ${formatCents(account.advanceCents)} advance on file` : ""}
               </p>
             </div>
             <div

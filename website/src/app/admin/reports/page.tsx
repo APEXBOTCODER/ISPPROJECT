@@ -2,6 +2,7 @@ import { requireStaff } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { formatCents } from "@/lib/pricing";
 import { parkNow } from "@/lib/availability";
+import { userAccountSummary } from "@/lib/installments";
 import ReportRangePicker from "@/components/ReportRangePicker";
 import UserRevenueSelect from "@/components/UserRevenueSelect";
 
@@ -35,100 +36,61 @@ export default async function AdminReportsPage({
   const rangeStart = new Date(`${from}T00:00:00`);
   const rangeEnd = new Date(`${nextDay}T00:00:00`);
 
-  const [resources, revenueAgg, planPaymentsAgg, duesAgg, activePlans, bookingCount, cancelledCount, noShowCount, refundAgg, refundCount] =
+  const [resources, resAgg, advDepAgg, creditAgg, standaloneAgg, activePlansRaw, bookingCount, cancelledCount, noShowCount, refundAgg, refundCount] =
     await Promise.all([
       prisma.resource.findMany({ where: { active: true }, orderBy: { sortOrder: "asc" } }),
-      // Revenue = money collected: confirmed + paid-then-cancelled (we kept the
-      // non-refunded portion), EXCLUDING payment-plan bookings — those are counted
-      // by actual payments received (planPaymentsAgg), not their full total.
+      // Financials below are a snapshot "to date", based on the amount ACTUALLY
+      // PAID on each non-cancelled reservation (not the full booking price), so
+      // partial payments, corrections, and advances are reflected correctly.
+      prisma.reservation.aggregate({
+        where: { kind: "BOOKING", status: { not: "CANCELLED" } },
+        _sum: { paidCents: true, totalCents: true },
+      }),
+      prisma.payment.aggregate({ where: { kind: "ADVANCE" }, _sum: { amountCents: true } }),
+      prisma.payment.aggregate({ where: { kind: "CREDIT" }, _sum: { amountCents: true } }),
       prisma.booking.aggregate({
         where: {
-          AND: [
-            { OR: [{ status: "CONFIRMED" }, { status: "CANCELLED", paymentRef: { not: null } }] },
-            { OR: [{ reservationId: null }, { reservation: { paymentPlan: false } }] },
-          ],
-          date: { gte: from, lte: to },
+          reservationId: null,
+          OR: [{ status: "CONFIRMED" }, { status: "CANCELLED", paymentRef: { not: null } }],
         },
         _sum: { totalCents: true },
       }),
-      // Cash collected on payment plans, counted by the date each payment was
-      // received (that's when the money actually came in).
-      prisma.payment.aggregate({
-        where: { createdAt: { gte: rangeStart, lt: rangeEnd } },
-        _sum: { amountCents: true },
-      }),
-      // Outstanding dues across active plans — a point-in-time figure, not ranged.
-      prisma.reservation.aggregate({
-        where: { paymentPlan: true, status: { not: "CANCELLED" } },
-        _sum: { totalCents: true, paidCents: true },
-      }),
+      // Reservations still owing (payment plans / recorded-as-due) with balance > 0.
       prisma.reservation.findMany({
         where: { paymentPlan: true, status: { not: "CANCELLED" } },
         select: { id: true, label: true, totalCents: true, paidCents: true, code: true, user: { select: { name: true, email: true } } },
         orderBy: { createdAt: "desc" },
       }),
+      // Activity metrics stay date-ranged (by session date).
       prisma.booking.count({ where: { status: "CONFIRMED", date: { gte: from, lte: to } } }),
-      // Cancellations counted by WHEN they were cancelled (refund-record timestamp),
-      // so the number lines up with the refunds issued in the same range.
       prisma.refundRecord.count({
         where: { cancelled: true, createdAt: { gte: rangeStart, lt: rangeEnd } },
       }),
       prisma.booking.count({ where: { status: "CONFIRMED", noShow: true, date: { gte: from, lte: to } } }),
-      prisma.refundRecord.aggregate({
-        where: { createdAt: { gte: rangeStart, lt: rangeEnd } },
-        _sum: { amountCents: true },
-      }),
-      prisma.refundRecord.count({ where: { amountCents: { gt: 0 }, createdAt: { gte: rangeStart, lt: rangeEnd } } }),
+      // Refunds to date (for the net-collected figure).
+      prisma.refundRecord.aggregate({ _sum: { amountCents: true } }),
+      prisma.refundRecord.count({ where: { amountCents: { gt: 0 } } }),
     ]);
 
-  const revenue = (revenueAgg._sum.totalCents ?? 0) + (planPaymentsAgg._sum.amountCents ?? 0);
+  const advanceOnFile = (advDepAgg._sum.amountCents ?? 0) - (creditAgg._sum.amountCents ?? 0);
+  const revenue = (resAgg._sum.paidCents ?? 0) + advanceOnFile + (standaloneAgg._sum.totalCents ?? 0);
   const refunded = refundAgg._sum.amountCents ?? 0;
-  const outstandingDues = Math.max(0, (duesAgg._sum.totalCents ?? 0) - (duesAgg._sum.paidCents ?? 0));
+  const outstandingDues = Math.max(0, (resAgg._sum.totalCents ?? 0) - (resAgg._sum.paidCents ?? 0));
+  const activePlans = activePlansRaw.filter((p) => p.totalCents - p.paidCents > 0); // still owing
   const numDays = daysInclusive(from, to);
 
-  // Revenue by user (only when specific users are selected).
+  // Per-customer account snapshot (only when specific users are selected).
   const userIds = (sp.users ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-  let userRevenue: { id: string; name: string; email: string; bookings: number; revenue: number; refunds: number }[] = [];
+  let userRevenue: { id: string; name: string; email: string; billed: number; paid: number; advance: number; balance: number }[] = [];
   let selectedUsers: { id: string; name: string }[] = [];
   if (userIds.length) {
-    const [selUsers, revByUser, planPayByUser, refByUser] = await Promise.all([
-      prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true, email: true } }),
-      prisma.booking.groupBy({
-        by: ["userId"],
-        where: {
-          userId: { in: userIds },
-          date: { gte: from, lte: to },
-          AND: [
-            { OR: [{ status: "CONFIRMED" }, { status: "CANCELLED", paymentRef: { not: null } }] },
-            { OR: [{ reservationId: null }, { reservation: { paymentPlan: false } }] },
-          ],
-        },
-        _sum: { totalCents: true },
-        _count: { _all: true },
-      }),
-      // Plan payments this user made in the range (money actually collected).
-      prisma.payment.groupBy({
-        by: ["userId"],
-        where: { userId: { in: userIds }, createdAt: { gte: rangeStart, lt: rangeEnd } },
-        _sum: { amountCents: true },
-      }),
-      prisma.refundRecord.groupBy({
-        by: ["userId"],
-        where: { userId: { in: userIds }, createdAt: { gte: rangeStart, lt: rangeEnd } },
-        _sum: { amountCents: true },
-      }),
-    ]);
-    const revMap = new Map(revByUser.map((r) => [r.userId, { sum: r._sum.totalCents ?? 0, count: r._count._all }]));
-    const planPayMap = new Map(planPayByUser.map((r) => [r.userId, r._sum.amountCents ?? 0]));
-    const refMap = new Map(refByUser.map((r) => [r.userId, r._sum.amountCents ?? 0]));
-    userRevenue = selUsers.map((u) => ({
-      id: u.id,
-      name: u.name,
-      email: u.email,
-      bookings: revMap.get(u.id)?.count ?? 0,
-      revenue: (revMap.get(u.id)?.sum ?? 0) + (planPayMap.get(u.id) ?? 0),
-      refunds: refMap.get(u.id) ?? 0,
-    }));
+    const selUsers = await prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true, email: true } });
+    userRevenue = await Promise.all(
+      selUsers.map(async (u) => {
+        const s = await userAccountSummary(u.id);
+        return { id: u.id, name: u.name, email: u.email, billed: s.billedCents, paid: s.paidCents, advance: s.advanceCents, balance: s.balanceCents };
+      })
+    );
     selectedUsers = selUsers.map((u) => ({ id: u.id, name: u.name }));
   }
 
@@ -157,24 +119,26 @@ export default async function AdminReportsPage({
   return (
     <div>
       <h1 className="display text-4xl text-navy">Reports</h1>
-      <p className="mt-2 text-sm text-navy/60">Revenue, refunds, and utilization for a date range (by session date).</p>
+      <p className="mt-2 text-sm text-navy/60">
+        Financial totals are a live snapshot (to date), based on the amount actually paid. Activity counts and
+        utilization are for the date range below (by session date).
+      </p>
 
       <div className="mt-4">
         <ReportRangePicker from={from} to={to} minDate={addDays(now.date, -365)} maxDate={addDays(now.date, 90)} />
       </div>
 
       <div className="mt-6 grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
-        {stat("Revenue collected", formatCents(revenue))}
-        {stat(refundCount === 1 ? "Refunded (1 refund)" : `Refunded (${refundCount} refunds)`, formatCents(refunded))}
-        {stat("Net", formatCents(revenue - refunded))}
-        {stat("Bookings", String(bookingCount))}
-        {stat("Cancelled", String(cancelledCount))}
+        {stat("Collected (to date)", formatCents(revenue))}
         {stat("Outstanding dues", formatCents(outstandingDues))}
+        {stat(refundCount === 1 ? "Refunded (1)" : `Refunded (${refundCount})`, formatCents(refunded))}
+        {stat("Net collected", formatCents(revenue - refunded))}
+        {stat(`Bookings (${numDays}d)`, String(bookingCount))}
+        {stat(`Cancelled (${numDays}d)`, String(cancelledCount))}
       </div>
       <p className="mt-2 text-xs text-navy/50">
-        Revenue &amp; bookings are counted by session date; plan payments, refunds &amp; cancellations by the date they were
-        processed. Outstanding dues is a live total across all active payment plans (not limited to the date range).
-        No-shows in range: {noShowCount}.
+        Collected = money actually received (payments + advances on file). Outstanding dues = still owed across all
+        reservations. Both are live to-date totals, not limited to the date range. No-shows in range: {noShowCount}.
       </p>
 
       <section className="mt-10">
@@ -227,24 +191,24 @@ export default async function AdminReportsPage({
       </section>
 
       <section className="mt-10">
-        <h2 className="display text-2xl text-navy">Revenue by user</h2>
+        <h2 className="display text-2xl text-navy">Account by customer</h2>
         <p className="mt-1 text-sm text-navy/60">
-          Search and select one or more users to see their confirmed revenue (minus refunds) for the
-          date range above.
+          Search and select one or more customers to see, per customer: total booked, paid, advance on file, and the
+          net balance (owed or credit). This is a live snapshot, not limited to the date range.
         </p>
         <div className="mt-3">
           <UserRevenueSelect from={from} to={to} initial={selectedUsers} />
         </div>
         {userRevenue.length > 0 && (
           <div className="mt-4 overflow-x-auto">
-            <table className="w-full min-w-[560px] text-left text-sm">
+            <table className="w-full min-w-[620px] text-left text-sm">
               <thead>
                 <tr className="border-b border-navy/15 text-xs uppercase text-navy/50">
-                  <th className="py-2 pr-4">User</th>
-                  <th className="py-2 pr-4">Bookings</th>
-                  <th className="py-2 pr-4">Revenue</th>
-                  <th className="py-2 pr-4">Refunds</th>
-                  <th className="py-2">Net</th>
+                  <th className="py-2 pr-4">Customer</th>
+                  <th className="py-2 pr-4">Booked</th>
+                  <th className="py-2 pr-4">Paid</th>
+                  <th className="py-2 pr-4">Advance</th>
+                  <th className="py-2">Balance</th>
                 </tr>
               </thead>
               <tbody>
@@ -254,20 +218,26 @@ export default async function AdminReportsPage({
                       <span className="font-medium text-navy">{u.name}</span>
                       <span className="block text-xs text-navy/50">{u.email}</span>
                     </td>
-                    <td className="py-2.5 pr-4">{u.bookings}</td>
-                    <td className="py-2.5 pr-4">{formatCents(u.revenue)}</td>
-                    <td className="py-2.5 pr-4 text-navy/60">{formatCents(u.refunds)}</td>
-                    <td className="py-2.5 font-semibold text-navy">{formatCents(u.revenue - u.refunds)}</td>
+                    <td className="py-2.5 pr-4">{formatCents(u.billed)}</td>
+                    <td className="py-2.5 pr-4">{formatCents(u.paid)}</td>
+                    <td className="py-2.5 pr-4 text-navy/60">{formatCents(u.advance)}</td>
+                    <td className={`py-2.5 font-semibold ${u.balance > 0 ? "text-amber-700" : u.balance < 0 ? "text-green-700" : "text-navy"}`}>
+                      {u.balance > 0
+                        ? `${formatCents(u.balance)} due`
+                        : u.balance < 0
+                          ? `${formatCents(-u.balance)} credit`
+                          : "Settled"}
+                    </td>
                   </tr>
                 ))}
               </tbody>
               <tfoot>
                 <tr className="border-t-2 border-navy/15 font-bold text-navy">
                   <td className="py-2 pr-4">Total</td>
-                  <td className="py-2 pr-4">{userRevenue.reduce((s, u) => s + u.bookings, 0)}</td>
-                  <td className="py-2 pr-4">{formatCents(userRevenue.reduce((s, u) => s + u.revenue, 0))}</td>
-                  <td className="py-2 pr-4">{formatCents(userRevenue.reduce((s, u) => s + u.refunds, 0))}</td>
-                  <td className="py-2">{formatCents(userRevenue.reduce((s, u) => s + u.revenue - u.refunds, 0))}</td>
+                  <td className="py-2 pr-4">{formatCents(userRevenue.reduce((s, u) => s + u.billed, 0))}</td>
+                  <td className="py-2 pr-4">{formatCents(userRevenue.reduce((s, u) => s + u.paid, 0))}</td>
+                  <td className="py-2 pr-4">{formatCents(userRevenue.reduce((s, u) => s + u.advance, 0))}</td>
+                  <td className="py-2">{formatCents(userRevenue.reduce((s, u) => s + u.balance, 0))}</td>
                 </tr>
               </tfoot>
             </table>

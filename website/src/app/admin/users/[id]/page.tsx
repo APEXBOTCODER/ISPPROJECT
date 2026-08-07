@@ -6,7 +6,7 @@ import { formatCents } from "@/lib/pricing";
 import { userRefundCapCents } from "@/lib/reservations";
 import { userAccountSummary, PAYMENT_METHODS } from "@/lib/installments";
 import ConfirmButton from "@/components/ConfirmButton";
-import { setUserRole, setManualVerified, setUserActive, resetUserPassword, updateUserProfile, emailInvoice, deleteUser, resetUserTwoFactor, recordUserPayment, fixReservationPaid } from "../actions";
+import { setUserRole, setManualVerified, setUserActive, resetUserPassword, updateUserProfile, emailInvoice, deleteUser, resetUserTwoFactor, recordUserPayment, fixReservationPaid, removePayment } from "../actions";
 
 export const metadata = { title: "Admin · User" };
 export const dynamic = "force-dynamic";
@@ -168,7 +168,7 @@ export default async function AdminUserDetailPage({
       {/* Account & payments */}
       <section className="mt-6 rounded-2xl border border-navy/10 p-5">
         <h2 className="display text-xl text-navy">Account &amp; payments</h2>
-        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <div className="rounded-xl bg-navy p-4 text-white">
             <div className="text-xs text-white/60">
               {account.balanceCents > 0 ? "Balance due" : account.balanceCents < 0 ? "Advance credit" : "Account settled"}
@@ -182,10 +182,12 @@ export default async function AdminUserDetailPage({
             <div className="mt-1 text-lg font-bold text-navy">{formatCents(account.billedCents)}</div>
           </div>
           <div className="rounded-xl border border-navy/10 p-4">
-            <div className="text-xs uppercase tracking-wide text-navy/50">
-              Paid{account.advanceCents > 0 ? ` · incl ${formatCents(account.advanceCents)} advance` : ""}
-            </div>
+            <div className="text-xs uppercase tracking-wide text-navy/50">Paid to bookings</div>
             <div className="mt-1 text-lg font-bold text-navy">{formatCents(account.paidCents)}</div>
+          </div>
+          <div className="rounded-xl border border-navy/10 p-4">
+            <div className="text-xs uppercase tracking-wide text-navy/50">Advance on file</div>
+            <div className="mt-1 text-lg font-bold text-navy">{formatCents(account.advanceCents)}</div>
           </div>
         </div>
 
@@ -204,6 +206,15 @@ export default async function AdminUserDetailPage({
                 ))}
             </select>
           </div>
+          {account.advanceCents > 0 && (
+            <div>
+              <label className="block text-[11px] font-semibold uppercase text-navy/50">Pay from</label>
+              <select name="source" className="mt-1 rounded-md border border-navy/20 px-2 py-2 text-sm">
+                <option value="new">New payment</option>
+                <option value="advance">Advance balance ({formatCents(account.advanceCents)})</option>
+              </select>
+            </div>
+          )}
           <div>
             <label className="block text-[11px] font-semibold uppercase text-navy/50">Amount</label>
             <input name="amount" inputMode="decimal" required placeholder="$" className="mt-1 w-28 rounded-md border border-navy/20 px-3 py-2 text-sm" />
@@ -218,7 +229,9 @@ export default async function AdminUserDetailPage({
           <button className="btn-brand rounded-md px-4 py-2 text-sm font-bold uppercase">Record payment</button>
         </form>
         <p className="mt-1 text-xs text-navy/50">
-          &ldquo;Account advance / credit&rdquo; is money paid ahead — it offsets what they owe as they book.
+          &ldquo;Account advance / credit&rdquo; is money paid ahead. To settle a booking from it, pick the reservation
+          and set &ldquo;Pay from&rdquo; to the advance balance — it applies up to the available credit and any
+          remainder stays due (the payment method is ignored when paying from advance).
         </p>
 
         {payments.length > 0 && (
@@ -235,8 +248,20 @@ export default async function AdminUserDetailPage({
                       {p.note ? ` · ${p.note}` : ""}
                     </span>
                   </span>
-                  <span className="whitespace-nowrap text-xs text-navy/40">
+                  <span className="flex items-center gap-3 whitespace-nowrap text-xs text-navy/40">
                     {p.createdAt.toISOString().slice(0, 10)} · {p.staff.name}
+                    {isAdmin && (
+                      <form action={removePayment}>
+                        <input type="hidden" name="userId" value={user.id} />
+                        <input type="hidden" name="paymentId" value={p.id} />
+                        <ConfirmButton
+                          message={`Remove this ${formatCents(p.amountCents)} payment? This recomputes the customer's paid amount and advance balance.`}
+                          className="font-semibold text-red-600 hover:underline"
+                        >
+                          Delete
+                        </ConfirmButton>
+                      </form>
+                    )}
                   </span>
                 </li>
               ))}

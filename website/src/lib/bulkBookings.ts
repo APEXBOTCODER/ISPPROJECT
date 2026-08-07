@@ -3,6 +3,17 @@ import { randomUUID } from "crypto";
 import { prisma } from "@/lib/prisma";
 import { priceForHours } from "@/lib/pricing";
 import { parkNow, slotKey } from "@/lib/availability";
+import { makeReservationCode } from "@/lib/reservationCode";
+
+/** A reservation code not currently in use (retries on the rare collision). */
+async function uniqueReservationCode(): Promise<string> {
+  for (let i = 0; i < 6; i++) {
+    const code = makeReservationCode();
+    const clash = await prisma.reservation.findFirst({ where: { code }, select: { id: true } });
+    if (!clash) return code;
+  }
+  return `ISP-${randomUUID().slice(0, 6).toUpperCase()}`;
+}
 
 const HEADERS = [
   "Ground",
@@ -159,8 +170,21 @@ export async function parseAndCreateBulk(
   }
 
   const results: BulkRowResult[] = [];
-  let created = 0;
 
+  // 1) Validate each row into a "prepared" booking; bad rows are reported/skipped.
+  type Prepared = {
+    rowNum: number;
+    ownerId: string;
+    ownerName: string;
+    resource: { id: string; name: string };
+    date: string;
+    from: number;
+    to: number;
+    hours: number[];
+    total: number;
+    org: string;
+  };
+  const prepared: Prepared[] = [];
   for (const r of rows) {
     const fail = (message: string) => results.push({ row: r.rowNum, ok: false, message });
     const resource = resourceByName.get(r.ground.toLowerCase());
@@ -172,48 +196,93 @@ export async function parseAndCreateBulk(
 
     // The Organization / Person must be an existing user — matched by email if
     // the value looks like an email, otherwise by exact (case-insensitive) name.
-    let ownerId: string;
+    let owner: { id: string; name: string };
     if (r.org.includes("@")) {
       const u = userByEmail.get(r.org.toLowerCase());
       if (!u) { fail(`Organization / Person "${r.org}" doesn't exist — no account with that email. Create the user first.`); continue; }
-      ownerId = u.id;
+      owner = u;
     } else {
       const matches = userByName.get(r.org.toLowerCase()) ?? [];
       if (matches.length === 0) { fail(`Organization / Person "${r.org}" doesn't exist — create the user account first (or use their email).`); continue; }
       if (matches.length > 1) { fail(`Multiple users are named "${r.org}" — put their email in this column instead.`); continue; }
-      ownerId = matches[0].id;
+      owner = matches[0];
     }
 
-    // Past dates and custom/short durations are intentionally allowed here.
-    const duration = r.to - r.from;
-
+    const duration = r.to - r.from; // past dates and custom/short durations are OK here
     const hours = Array.from({ length: duration }, (_, i) => (r.from as number) + i);
-    const ref = `BULK-${randomUUID()}`;
-    // Use the admin-entered price/hr when given, else the facility's standard price.
-    const total =
-      r.priceCents != null ? r.priceCents * duration : priceForHours(resource, r.date, hours);
+    const total = r.priceCents != null ? r.priceCents * duration : priceForHours(resource, r.date, hours);
+    prepared.push({ rowNum: r.rowNum, ownerId: owner.id, ownerName: owner.name, resource: { id: resource.id, name: resource.name }, date: r.date, from: r.from, to: r.to, hours, total, org: r.org });
+  }
+
+  // 2) Drop rows whose slots clash — with each other (intra-upload) or existing
+  //    bookings — so one bad row doesn't sink a whole customer's reservation.
+  const keyOf = (resourceId: string, sk: string) => `${resourceId}:${sk}`;
+  const wantSlots = prepared.flatMap((p) => p.hours.map((h) => ({ rowNum: p.rowNum, resourceId: p.resource.id, slotKey: slotKey(p.date, h) })));
+  const allSlotKeys = Array.from(new Set(wantSlots.map((w) => w.slotKey)));
+  const existing = allSlotKeys.length
+    ? await prisma.bookingSlot.findMany({ where: { slotKey: { in: allSlotKeys } }, select: { resourceId: true, slotKey: true } })
+    : [];
+  const takenKeys = new Set(existing.map((e) => keyOf(e.resourceId, e.slotKey)));
+  const intraSeen = new Set<string>();
+  const conflictRows = new Set<number>();
+  for (const w of wantSlots) {
+    const k = keyOf(w.resourceId, w.slotKey);
+    if (takenKeys.has(k) || intraSeen.has(k)) conflictRows.add(w.rowNum);
+    intraSeen.add(k);
+  }
+  for (const p of prepared) {
+    if (conflictRows.has(p.rowNum)) {
+      results.push({ row: p.rowNum, ok: false, message: `Already booked / duplicate slot — ${p.resource.name} ${p.date} ${p.from}:00–${p.to}:00.` });
+    }
+  }
+  const clean = prepared.filter((p) => !conflictRows.has(p.rowNum));
+
+  // 3) Group by customer → ONE reservation (one code) per customer, marked
+  //    UNPAID. Admin records payment / advance / a plan against it afterward.
+  const byOwner = new Map<string, Prepared[]>();
+  for (const p of clean) {
+    const arr = byOwner.get(p.ownerId) ?? [];
+    arr.push(p);
+    byOwner.set(p.ownerId, arr);
+  }
+
+  let created = 0;
+  for (const [ownerId, items] of byOwner) {
+    const total = items.reduce((s, p) => s + p.total, 0);
+    const code = await uniqueReservationCode();
     try {
       await prisma.$transaction(async (tx) => {
         const res = await tx.reservation.create({
-          data: { userId: ownerId, kind: "BOOKING", label: r.org, totalCents: total, status: "CONFIRMED", paymentRef: ref, notes: `Bulk upload by ${staff.name}` },
+          data: {
+            userId: ownerId,
+            code,
+            kind: "BOOKING",
+            label: items[0].ownerName,
+            totalCents: total,
+            status: "CONFIRMED",
+            paidCents: 0, // unpaid — the whole balance is due until payment is recorded
+            paymentRef: null,
+            notes: `Bulk upload by ${staff.name} — unpaid (balance due)`,
+          },
         });
-        const booking = await tx.booking.create({
-          data: { userId: ownerId, reservationId: res.id, resourceId: resource.id, date: r.date as string, startHour: r.from as number, endHour: r.to as number, status: "CONFIRMED", totalCents: total, paymentRef: ref },
-        });
-        await tx.bookingSlot.createMany({
-          data: hours.map((h) => ({ bookingId: booking.id, resourceId: resource.id, slotKey: slotKey(r.date as string, h) })),
-        });
+        for (const p of items) {
+          const booking = await tx.booking.create({
+            data: { userId: ownerId, reservationId: res.id, resourceId: p.resource.id, date: p.date, startHour: p.from, endHour: p.to, status: "CONFIRMED", totalCents: p.total, paymentRef: null },
+          });
+          await tx.bookingSlot.createMany({
+            data: p.hours.map((h) => ({ bookingId: booking.id, resourceId: p.resource.id, slotKey: slotKey(p.date, h) })),
+          });
+        }
       });
-      created += 1;
-      results.push({ row: r.rowNum, ok: true, message: `${resource.name} · ${r.date} · ${r.from}:00–${r.to}:00 · ${r.org} · $${(total / 100).toFixed(2)}` });
-    } catch (error: unknown) {
-      if ((error as { code?: string })?.code === "P2002") {
-        fail(`Already booked — ${resource.name} ${r.date} ${r.from}:00–${r.to}:00.`);
-      } else {
-        fail("Could not create this booking (unexpected error).");
+      created += items.length;
+      for (const p of items) {
+        results.push({ row: p.rowNum, ok: true, message: `${code} · ${p.resource.name} · ${p.date} · ${p.from}:00–${p.to}:00 · ${p.org} · $${(p.total / 100).toFixed(2)} (unpaid)` });
       }
+    } catch {
+      for (const p of items) results.push({ row: p.rowNum, ok: false, message: "Could not create this booking (unexpected error)." });
     }
   }
 
+  results.sort((a, b) => a.row - b.row);
   return { created, failed: results.filter((x) => !x.ok).length, results };
 }
